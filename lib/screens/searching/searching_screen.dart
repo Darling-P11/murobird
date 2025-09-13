@@ -6,6 +6,7 @@ import '../../ml/birdnet_service.dart';
 
 class SearchingScreen extends StatefulWidget {
   const SearchingScreen({super.key});
+
   @override
   State<SearchingScreen> createState() => _SearchingScreenState();
 }
@@ -14,15 +15,27 @@ class _SearchingScreenState extends State<SearchingScreen> {
   String _status = 'Cargando modelo…';
   double _progress = 0.1;
 
+  String? _audioPath;
+  bool _started = false; // evita correr _run() más de una vez
+
   @override
-  void initState() {
-    super.initState();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_started) return;
+    _started = true;
+
+    final args = ModalRoute.of(context)?.settings.arguments;
+    _audioPath = switch (args) {
+      String s => s,
+      Map m => m['audioPath'] as String?,
+      _ => null,
+    };
+
     _run();
   }
 
   Future<void> _run() async {
-    final String? audioPath =
-        ModalRoute.of(context)!.settings.arguments as String?;
+    final audioPath = _audioPath;
     try {
       setState(() => _status = 'Inicializando…');
       await BirdnetService.I.load();
@@ -31,6 +44,7 @@ class _SearchingScreenState extends State<SearchingScreen> {
         _status = 'Analizando audio…';
         _progress = 0.55;
       });
+
       if (audioPath == null || !await File(audioPath).exists()) {
         throw 'Audio no encontrado';
       }
@@ -39,8 +53,8 @@ class _SearchingScreenState extends State<SearchingScreen> {
         audioPath,
         segmentSeconds: 3,
         hopSeconds: 1,
-        scoreThreshold: 0.35,
-        topK: 3,
+        scoreThreshold: 0.20, // más permisivo para ver resultados
+        topK: 5,
       );
 
       setState(() {
@@ -67,7 +81,11 @@ class _SearchingScreenState extends State<SearchingScreen> {
               .toList(),
         },
       );
-    } catch (e) {
+    } catch (e, st) {
+      // Logs útiles en consola
+      // ignore: avoid_print
+      print('Searching ERROR: $e\n$st');
+
       if (!mounted) return;
       Navigator.pushReplacementNamed(
         context,
