@@ -1,12 +1,130 @@
-import 'package:flutter/material.dart';
-import '../../core/theme.dart';
-import '../../core/routes.dart';
+import 'dart:io';
 
-class UploadAudioScreen extends StatelessWidget {
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/material.dart';
+
+import '../../core/routes.dart';
+import '../../core/theme.dart';
+import '../../ml/birdnet_service.dart';
+
+class UploadAudioScreen extends StatefulWidget {
   const UploadAudioScreen({super.key});
 
   @override
+  State<UploadAudioScreen> createState() => _UploadAudioScreenState();
+}
+
+class _UploadAudioScreenState extends State<UploadAudioScreen> {
+  final List<PlatformFile> _picked = [];
+  bool _busy = false;
+  double _progress = 0;
+  String? _error;
+
+  Future<void> _pickFiles() async {
+    if (_busy) return;
+    setState(() => _error = null);
+
+    final res = await FilePicker.platform.pickFiles(
+      allowMultiple: true,
+      withData: false,
+      type: FileType.custom,
+      allowedExtensions: const ['wav'], // BirdNET requiere WAV PCM 16-bit
+    );
+
+    if (res == null) return;
+
+    final files = res.files.where((f) => f.path != null).take(3).toList();
+    setState(() {
+      _picked
+        ..clear()
+        ..addAll(files);
+    });
+  }
+
+  // --------- Análisis con BirdNET ---------
+
+  Future<List<_Pred>> _analyzeOne(String path) async {
+    if (!await File(path).exists()) return const [];
+    final preds = await BirdnetService.I.predictFromWav(
+      path,
+      segmentSeconds: 3,
+      hopSeconds: 1,
+      scoreThreshold: 0.30,
+      topK: 5,
+    );
+    return preds
+        .map((p) => _Pred(p.label, p.score, p.startSec, p.endSec))
+        .toList();
+  }
+
+  Map<String, dynamic> _mergeAndBuildArgs(List<List<_Pred>> all) {
+    String norm(String s) =>
+        s.replaceAll('_', ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+
+    final Map<String, _Pred> best = {};
+    for (final list in all) {
+      for (final p in list) {
+        final k = norm(p.name);
+        final prev = best[k];
+        if (prev == null || p.confidence > prev.confidence) best[k] = p;
+      }
+    }
+
+    final merged = best.values.toList()
+      ..sort((a, b) => b.confidence.compareTo(a.confidence));
+
+    final topBird = merged.isNotEmpty ? merged.first.name : '';
+    final candidates = merged.skip(1).map((p) {
+      return {
+        'name': p.name,
+        'confidence': p.confidence,
+        'start': p.start,
+        'end': p.end,
+      };
+    }).toList();
+
+    return {'topBird': topBird, 'candidates': candidates};
+  }
+
+  Future<void> _analyze() async {
+    if (_picked.isEmpty || _busy) return;
+
+    setState(() {
+      _busy = true;
+      _progress = 0;
+      _error = null;
+    });
+
+    try {
+      await BirdnetService.I.load();
+
+      final results = <List<_Pred>>[];
+      for (var i = 0; i < _picked.length; i++) {
+        final p = _picked[i];
+        final preds = await _analyzeOne(p.path!);
+        results.add(preds);
+        if (mounted) setState(() => _progress = (i + 1) / _picked.length);
+      }
+
+      final args = _mergeAndBuildArgs(results);
+      if (!mounted) return;
+      Navigator.pushNamed(context, Routes.result, arguments: args);
+    } catch (e) {
+      if (mounted) setState(() => _error = 'Error al analizar: $e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _progress = 0;
+        });
+      }
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final canAnalyze = _picked.isNotEmpty && !_busy;
+
     return Scaffold(
       backgroundColor: kBg,
       body: CustomScrollView(
@@ -42,6 +160,17 @@ class UploadAudioScreen extends StatelessWidget {
                 ),
               ],
             ),
+            bottom: _busy
+                ? PreferredSize(
+                    preferredSize: const Size.fromHeight(4),
+                    child: LinearProgressIndicator(
+                      value: _progress == 0 ? null : _progress,
+                      color: Colors.white,
+                      backgroundColor: Colors.white24,
+                      minHeight: 3,
+                    ),
+                  )
+                : null,
           ),
 
           SliverToBoxAdapter(
@@ -72,7 +201,7 @@ class UploadAudioScreen extends StatelessWidget {
                     width: double.infinity,
                     child: ElevatedButton.icon(
                       icon: const Icon(Icons.folder_open),
-                      label: const Text('Seleccionar archivo de audio'),
+                      label: const Text('Seleccionar archivo de audio (WAV)'),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: kBrand,
                         foregroundColor: Colors.white,
@@ -86,26 +215,28 @@ class UploadAudioScreen extends StatelessWidget {
                           fontSize: 16,
                         ),
                       ),
-                      onPressed: () {
-                        // TODO: file picker
-                      },
+                      onPressed: _pickFiles,
                     ),
                   ),
 
                   const SizedBox(height: 22),
 
-                  // ===== TABLA SIN "FORMATO" - RESPONSIVA Y SIN OVERFLOW =====
-                  const _FilesTable(
-                    rows: [
-                      _FileRow('10:15', '001_AudioGrabado'),
-                      _FileRow('20:11', '002_AudioGrabado'),
-                      _FileRow('01:23', '003_AudioGrabado'),
-                    ],
+                  // Tabla dinámica con los archivos elegidos
+                  _FilesTable(
+                    rows: _picked
+                        .map(
+                          (f) => _FileRow('--:--', f.name),
+                        ) // duración no se calcula aquí
+                        .toList(),
+                    onDelete: (index) {
+                      if (_busy) return;
+                      setState(() => _picked.removeAt(index));
+                    },
                   ),
 
                   const SizedBox(height: 28),
 
-                  // Requisitos
+                  // Requisitos (nota: por ahora solo WAV para BirdNET)
                   const Align(
                     alignment: Alignment.centerLeft,
                     child: Text(
@@ -120,7 +251,7 @@ class UploadAudioScreen extends StatelessWidget {
                   const Align(
                     alignment: Alignment.centerLeft,
                     child: Text(
-                      '* Formato: .mp3, .wav, .m4a\n'
+                      '* Formato: WAV (PCM 16-bit)\n'
                       '* Tiempo (máx): 30 minutos\n'
                       '* Tiempo (mín): 30 segundos\n'
                       '* Máximo de audio por análisis: 3',
@@ -128,14 +259,18 @@ class UploadAudioScreen extends StatelessWidget {
                     ),
                   ),
 
+                  if (_error != null) ...[
+                    const SizedBox(height: 12),
+                    Text(_error!, style: const TextStyle(color: Colors.red)),
+                  ],
+
                   const SizedBox(height: 24),
 
                   Row(
                     children: [
                       const Spacer(),
                       FilledButton.icon(
-                        onPressed: () =>
-                            Navigator.pushNamed(context, Routes.searching),
+                        onPressed: canAnalyze ? _analyze : null,
                         icon: const Icon(Icons.arrow_forward),
                         label: const Text('Analizar'),
                         style: FilledButton.styleFrom(
@@ -170,8 +305,10 @@ class UploadAudioScreen extends StatelessWidget {
 /* =======================  WIDGETS DE LA TABLA  ======================= */
 
 class _FilesTable extends StatelessWidget {
-  const _FilesTable({required this.rows});
+  const _FilesTable({required this.rows, required this.onDelete});
+
   final List<_FileRow> rows;
+  final ValueChanged<int> onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -179,16 +316,22 @@ class _FilesTable extends StatelessWidget {
       builder: (context, c) {
         final width = c.maxWidth;
         final compact = width < 380; // teléfonos angostos
-        return _TableCore(rows: rows, compact: compact);
+        return _TableCore(rows: rows, compact: compact, onDelete: onDelete);
       },
     );
   }
 }
 
 class _TableCore extends StatelessWidget {
-  const _TableCore({required this.rows, required this.compact});
+  const _TableCore({
+    required this.rows,
+    required this.compact,
+    required this.onDelete,
+  });
+
   final List<_FileRow> rows;
   final bool compact;
+  final ValueChanged<int> onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -200,8 +343,8 @@ class _TableCore extends StatelessWidget {
 
     // SIN columna de Formato
     final timeFlex = 24;
-    final nameFlex = 52;
-    final actFlex = 24; // más ancho para iconos
+    final nameFlex = 60;
+    final actFlex = 16; // solo eliminar
 
     return Container(
       decoration: BoxDecoration(
@@ -242,7 +385,7 @@ class _TableCore extends StatelessWidget {
                 ),
                 const _VSep(),
                 _HeaderCell(
-                  'Acciones',
+                  'Acción',
                   flex: actFlex,
                   style: headerStyle,
                   center: true,
@@ -254,11 +397,13 @@ class _TableCore extends StatelessWidget {
           // Filas
           for (int i = 0; i < rows.length; i++) ...[
             _DataRow(
+              index: i,
               row: rows[i],
               compact: compact,
               timeFlex: timeFlex,
               nameFlex: nameFlex,
               actFlex: actFlex,
+              onDelete: onDelete,
             ),
             if (i != rows.length - 1)
               const Divider(height: 1, thickness: 1, color: Color(0xFFE8E8E8)),
@@ -313,18 +458,22 @@ class _VSep extends StatelessWidget {
 
 class _DataRow extends StatelessWidget {
   const _DataRow({
+    required this.index,
     required this.row,
     required this.compact,
     required this.timeFlex,
     required this.nameFlex,
     required this.actFlex,
+    required this.onDelete,
   });
 
+  final int index;
   final _FileRow row;
   final bool compact;
   final int timeFlex;
   final int nameFlex;
   final int actFlex;
+  final ValueChanged<int> onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -334,11 +483,11 @@ class _DataRow extends StatelessWidget {
     );
     final textStyle = TextStyle(fontSize: compact ? 13 : 14);
 
-    // Botones realmente compactos (para que siempre quepan)
+    // Botón compacto (solo eliminar)
     final iconSize = compact ? 18.0 : 20.0;
     final constraints = BoxConstraints.tightFor(
-      width: compact ? 32 : 34,
-      height: compact ? 32 : 34,
+      width: compact ? 34 : 36,
+      height: compact ? 34 : 36,
     );
 
     return Padding(
@@ -365,38 +514,13 @@ class _DataRow extends StatelessWidget {
             flex: actFlex,
             child: Align(
               alignment: Alignment.centerRight,
-              child: FittedBox(
-                fit: BoxFit.scaleDown, // si aún falta ancho, reduce suavemente
-                child: Row(
-                  children: [
-                    IconButton(
-                      padding: EdgeInsets.zero,
-                      constraints: constraints,
-                      iconSize: iconSize,
-                      onPressed: () {},
-                      icon: const Icon(Icons.play_arrow_rounded, color: kBrand),
-                      splashRadius: 18,
-                    ),
-                    const SizedBox(width: 6),
-                    IconButton(
-                      padding: EdgeInsets.zero,
-                      constraints: constraints,
-                      iconSize: iconSize,
-                      onPressed: () {},
-                      icon: const Icon(Icons.delete_outline, color: kBrand),
-                      splashRadius: 18,
-                    ),
-                    const SizedBox(width: 6),
-                    IconButton(
-                      padding: EdgeInsets.zero,
-                      constraints: constraints,
-                      iconSize: iconSize,
-                      onPressed: () {},
-                      icon: const Icon(Icons.sync, color: kBrand),
-                      splashRadius: 18,
-                    ),
-                  ],
-                ),
+              child: IconButton(
+                padding: EdgeInsets.zero,
+                constraints: constraints,
+                iconSize: iconSize,
+                onPressed: () => onDelete(index),
+                icon: const Icon(Icons.delete_outline, color: kBrand),
+                splashRadius: 18,
               ),
             ),
           ),
@@ -407,7 +531,17 @@ class _DataRow extends StatelessWidget {
 }
 
 class _FileRow {
-  final String time;
+  final String time; // aquí usamos placeholder "--:--"
   final String name;
   const _FileRow(this.time, this.name);
+}
+
+/* =======================  MODELO LOCAL PARA MERGE  ======================= */
+
+class _Pred {
+  final String name;
+  final double confidence;
+  final double start;
+  final double end;
+  _Pred(this.name, this.confidence, this.start, this.end);
 }

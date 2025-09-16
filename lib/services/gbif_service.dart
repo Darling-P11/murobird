@@ -8,7 +8,6 @@ const _headers = {
 
 class GbifService {
   static Future<int?> fetchSpeciesKey(String scientificName) async {
-    // Normaliza al máximo para evitar fallos por html, underscores, autores, etc.
     final cleaned = scientificName
         .replaceAll(RegExp(r'<[^>]+>'), '')
         .replaceAll('_', ' ')
@@ -29,7 +28,7 @@ class GbifService {
       if (key is int) return key;
     }
 
-    // Fallback por búsqueda
+    // Fallback a /search si /match no da usageKey
     final sUri = Uri.parse(
       'https://api.gbif.org/v1/species/search',
     ).replace(queryParameters: {'q': binomial, 'limit': '1'});
@@ -42,15 +41,16 @@ class GbifService {
     return (maybeKey is int) ? maybeKey : null;
   }
 
-  /// Occurrences con coordenadas para overlay de puntos (máx 200).
+  /// Ocurrencias con coordenadas para overlay de puntos.
   static Future<List<Map<String, dynamic>>> fetchOccurrences(
-    int taxonKey,
-  ) async {
+    int taxonKey, {
+    int limit = 200,
+  }) async {
     final uri = Uri.parse('https://api.gbif.org/v1/occurrence/search').replace(
       queryParameters: {
         'taxonKey': '$taxonKey',
         'hasCoordinate': 'true',
-        'limit': '200',
+        'limit': '$limit',
       },
     );
     final r = await http.get(uri, headers: _headers);

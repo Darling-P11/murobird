@@ -1,7 +1,5 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
-import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import '../services/gbif_service.dart';
 
@@ -45,7 +43,10 @@ class _DistributionMapState extends State<DistributionMap> {
     try {
       final key = int.tryParse(widget.taxonKey);
       if (key == null) return;
-      final occ = await GbifService.fetchOccurrences(key);
+      final occ = await GbifService.fetchOccurrences(
+        key,
+        limit: widget.pointsLimit,
+      );
 
       final pts = <LatLng>[];
       for (final m in occ) {
@@ -91,14 +92,12 @@ class _DistributionMapState extends State<DistributionMap> {
             initialZoom: widget.zoom,
           ),
           children: [
-            // Base
             TileLayer(
               urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
               userAgentPackageName: 'com.example.murobird',
               tileProvider: NetworkTileProvider(headers: _headers),
               maxNativeZoom: 19,
             ),
-            // Heatmap/tiles de GBIF (SIN additionalOptions inmutables)
             TileLayer(
               urlTemplate: overlayUrl,
               userAgentPackageName: 'com.example.murobird',

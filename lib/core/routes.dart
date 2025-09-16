@@ -13,4 +13,5 @@ class Routes {
   static const about = '/settings/about';
   static const privacy = '/settings/privacy';
   static const appPermissions = '/settings/app-permissions';
+  
 }

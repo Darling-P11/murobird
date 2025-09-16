@@ -42,6 +42,7 @@ class BirbyApp extends StatelessWidget {
         Routes.about: (_) => AboutScreen(),
         Routes.privacy: (_) => PrivacyScreen(),
         Routes.appPermissions: (_) => AppPermissionsScreen(),
+        
       },
     );
   }
