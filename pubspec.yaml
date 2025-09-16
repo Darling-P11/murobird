@@ -18,6 +18,10 @@ dependencies:
   tflite_flutter: ^0.11.0
   fftea: ^1.0.0
   http: ^1.2.2  
+  audioplayers: ^5.2.1
+  url_launcher: ^6.3.0
+  flutter_map: ^6.1.0
+  latlong2: ^0.9.1
 
 dev_dependencies:
   flutter_test:
@@ -46,6 +50,8 @@ flutter:
     - assets/models/birdnet/meta-model.tflite
     # Puedes incluir el directorio de labels completo
     - assets/models/birdnet/labels/
+    - assets/mock/
+    
 
 flutter_launcher_icons:
   android: true

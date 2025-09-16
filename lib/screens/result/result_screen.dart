@@ -1,6 +1,30 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
+
 import '../../core/theme.dart';
 import '../../services/wiki_bird_service.dart';
+import '../../services/gbif_service.dart';
+import '../../widgets/distribution_map.dart';
+import '../../widgets/reference_audios.dart'; // usa audioplayers integrado
+
+// ---------------------- Helpers ----------------------
+String _cleanLabel(String raw) {
+  final noTags = raw.replaceAll(RegExp(r'<[^>]+>'), '');
+  final norm = noTags
+      .replaceAll('_', ' ')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+  final m = RegExp(r'([A-Z][a-zA-Z\-]+)\s+([a-z\-]+)').firstMatch(norm);
+  return (m != null) ? '${m.group(1)} ${m.group(2)}' : norm;
+}
+
+bool _isSupportedImage(String url) {
+  final u = url.toLowerCase();
+  if (u.startsWith('data:')) return false;
+  if (u.endsWith('.svg') || u.contains('format=svg')) return false;
+  return u.startsWith('http');
+}
+// ----------------------------------------------------
 
 class ResultScreen extends StatelessWidget {
   const ResultScreen({super.key});
@@ -8,7 +32,8 @@ class ResultScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final args = (ModalRoute.of(context)!.settings.arguments ?? {}) as Map;
-    final topBird = (args['topBird'] ?? '') as String;
+    final rawTopBird = (args['topBird'] ?? '') as String;
+    final topBird = _cleanLabel(rawTopBird);
     final List candidates = (args['candidates'] ?? []) as List;
 
     return Scaffold(
@@ -26,13 +51,26 @@ class ResultScreen extends StatelessWidget {
         future: topBird.isNotEmpty
             ? WikiBirdService.fetch(topBird)
             : Future.value(null),
-        builder: (context, snap) {
-          if (snap.connectionState == ConnectionState.waiting) {
+        builder: (context, snapWiki) {
+          if (snapWiki.connectionState == ConnectionState.waiting) {
             return const Center(
               child: CircularProgressIndicator(color: kBrand),
             );
           }
-          final data = snap.data;
+
+          final data = snapWiki.data;
+          final sciName = _cleanLabel((data?.scientificName ?? topBird).trim());
+          final displayTitle = _cleanLabel((data?.displayTitle ?? topBird));
+
+          final hero =
+              (data?.mainImage != null && _isSupportedImage(data!.mainImage!))
+              ? data!.mainImage!
+              : null;
+
+          final gallery = (data?.gallery ?? [])
+              .whereType<String>()
+              .where(_isSupportedImage)
+              .toList();
 
           return ListView(
             padding: const EdgeInsets.all(16),
@@ -48,16 +86,16 @@ class ResultScreen extends StatelessWidget {
               ),
               const SizedBox(height: 6),
               Text(
-                data?.displayTitle ?? topBird,
+                displayTitle,
                 style: const TextStyle(
                   fontSize: 26,
                   fontWeight: FontWeight.w900,
                 ),
               ),
-              if (data?.scientificName != null) ...[
+              if (sciName.isNotEmpty) ...[
                 const SizedBox(height: 4),
                 Text(
-                  data!.scientificName!,
+                  sciName,
                   style: const TextStyle(
                     fontStyle: FontStyle.italic,
                     color: Colors.black54,
@@ -65,16 +103,26 @@ class ResultScreen extends StatelessWidget {
                 ),
               ],
               const SizedBox(height: 12),
-              if (data?.mainImage != null)
+              if (hero != null)
                 ClipRRect(
                   borderRadius: BorderRadius.circular(12),
                   child: Image.network(
-                    data!.mainImage!,
+                    hero,
                     height: 200,
                     width: double.infinity,
                     fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => Container(
+                      height: 200,
+                      color: const Color(0xFFEFEFEF),
+                      alignment: Alignment.center,
+                      child: const Text(
+                        'Imagen no disponible',
+                        style: TextStyle(color: Colors.black54),
+                      ),
+                    ),
                   ),
                 ),
+
               const SizedBox(height: 16),
               const Divider(),
 
@@ -91,14 +139,58 @@ class ResultScreen extends StatelessWidget {
                   color: Colors.black87,
                 ),
               ),
+
               const SizedBox(height: 22),
+
+              // ===== Audios de referencia =====
+              const _Section('Audios de referencia', Icons.podcasts_rounded),
+              const SizedBox(height: 8),
+              if (sciName.isNotEmpty)
+                ReferenceAudios(scientificName: sciName)
+              else
+                const Text(
+                  'No hay audios de referencia disponibles.',
+                  style: TextStyle(color: Colors.black54),
+                ),
+
+              const SizedBox(height: 24),
+
+              // ===== Mapa de distribución =====
+              const _Section('Mapa de distribución', Icons.public_rounded),
+              const SizedBox(height: 10),
+              FutureBuilder<int?>(
+                future: sciName.isNotEmpty
+                    ? GbifService.fetchSpeciesKey(sciName)
+                    : Future.value(null),
+                builder: (context, snapGbif) {
+                  if (snapGbif.connectionState == ConnectionState.waiting) {
+                    return const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 10),
+                      child: LinearProgressIndicator(color: kBrand),
+                    );
+                  }
+                  final speciesKey = snapGbif.data;
+                  if (speciesKey == null) {
+                    return const Text(
+                      'No encontramos el taxón en GBIF.',
+                      style: TextStyle(color: Colors.black54),
+                    );
+                  }
+                  return DistributionMap(
+                    taxonKey: speciesKey.toString(),
+                    showPoints: true,
+                  );
+                },
+              ),
+
+              const SizedBox(height: 24),
 
               // ===== Galería =====
               const _Section('Galería', Icons.photo_camera_back_rounded),
               const SizedBox(height: 10),
-              if (data != null && data.gallery.isNotEmpty)
+              if (gallery.isNotEmpty)
                 GridView.builder(
-                  itemCount: data.gallery.length,
+                  itemCount: gallery.length,
                   shrinkWrap: true,
                   physics: const NeverScrollableScrollPhysics(),
                   padding: EdgeInsets.zero,
@@ -110,7 +202,18 @@ class ResultScreen extends StatelessWidget {
                   ),
                   itemBuilder: (_, i) => ClipRRect(
                     borderRadius: BorderRadius.circular(12),
-                    child: Image.network(data.gallery[i], fit: BoxFit.cover),
+                    child: Image.network(
+                      gallery[i],
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => Container(
+                        color: const Color(0xFFEFEFEF),
+                        alignment: Alignment.center,
+                        child: const Text(
+                          'Imagen no disponible',
+                          style: TextStyle(color: Colors.black54),
+                        ),
+                      ),
+                    ),
                   ),
                 )
               else
@@ -132,7 +235,7 @@ class ResultScreen extends StatelessWidget {
               else
                 ...candidates.map(
                   (c) => _CandidateTile(
-                    name: c['name'] as String,
+                    name: _cleanLabel(c['name'] as String),
                     score: (c['confidence'] as num).toDouble(),
                     start: (c['start'] as num).toDouble(),
                     end: (c['end'] as num).toDouble(),
