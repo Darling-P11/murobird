@@ -27,6 +27,8 @@ dependencies:
   shared_preferences: ^2.2.3
   archive: ^3.6.1
   connectivity_plus: ^6.0.5
+  share_plus: ^10.0.0
+  lottie: ^3.1.2
 
 dev_dependencies:
   flutter_test:
@@ -57,6 +59,7 @@ flutter:
     - assets/models/birdnet/labels/
     - assets/mock/
     - assets/maps/world_countries_110m.geojson
+    - assets/mock/bird.json
     
 
 flutter_launcher_icons:

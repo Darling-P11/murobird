@@ -1,3 +1,4 @@
+// lib/screens/upload/upload_audio_screen.dart
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
@@ -6,6 +7,7 @@ import 'package:flutter/material.dart';
 import '../../core/routes.dart';
 import '../../core/theme.dart';
 import '../../ml/birdnet_service.dart';
+import '../../widgets/blocking_loader.dart'; // 👈 NUEVO
 
 class UploadAudioScreen extends StatefulWidget {
   const UploadAudioScreen({super.key});
@@ -86,6 +88,7 @@ class _UploadAudioScreenState extends State<UploadAudioScreen> {
     return {'topBird': topBird, 'candidates': candidates};
   }
 
+  // 👇👇 AQUI VA EL LOADER BLOQUEANTE
   Future<void> _analyze() async {
     if (_picked.isEmpty || _busy) return;
 
@@ -94,6 +97,10 @@ class _UploadAudioScreenState extends State<UploadAudioScreen> {
       _progress = 0;
       _error = null;
     });
+
+    // Abre loader bloqueante (evita toques y botón atrás)
+    showBlockingLoader(context, message: 'Analizando audios…');
+    final started = DateTime.now();
 
     try {
       await BirdnetService.I.load();
@@ -107,10 +114,24 @@ class _UploadAudioScreenState extends State<UploadAudioScreen> {
       }
 
       final args = _mergeAndBuildArgs(results);
+
+      // Duración mínima para que el loader no “parpadee”
+      final elapsed = DateTime.now().difference(started);
+      const minMs = 400;
+      if (elapsed.inMilliseconds < minMs) {
+        await Future.delayed(
+          Duration(milliseconds: minMs - elapsed.inMilliseconds),
+        );
+      }
+
       if (!mounted) return;
+      Navigator.pop(context); // cierra loader
       Navigator.pushNamed(context, Routes.result, arguments: args);
     } catch (e) {
-      if (mounted) setState(() => _error = 'Error al analizar: $e');
+      if (mounted) {
+        Navigator.pop(context); // cierra loader si hubo error
+        setState(() => _error = 'Error al analizar: $e');
+      }
     } finally {
       if (mounted) {
         setState(() {
@@ -226,7 +247,7 @@ class _UploadAudioScreenState extends State<UploadAudioScreen> {
                     rows: _picked
                         .map(
                           (f) => _FileRow('--:--', f.name),
-                        ) // duración no se calcula aquí
+                        ) // duración no calculada aquí
                         .toList(),
                     onDelete: (index) {
                       if (_busy) return;

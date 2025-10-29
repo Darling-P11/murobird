@@ -1,4 +1,10 @@
+import 'dart:io';
+import 'dart:math' as math;
+import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
+
 import '../../core/theme.dart';
 import '../../core/routes.dart';
 
@@ -11,69 +17,112 @@ class RecordingsScreen extends StatefulWidget {
 
 class _RecordingsScreenState extends State<RecordingsScreen> {
   final TextEditingController _search = TextEditingController();
-  RecordingSource _filter = RecordingSource.all;
-
-  // Datos de ejemplo
-  final List<_Recording> _all = [
-    _Recording(
-      id: 'r1',
-      name: '2025-05-09_Manakin',
-      dateTime: DateTime(2025, 5, 9, 7, 42),
-      duration: const Duration(seconds: 38),
-      sizeMb: 2.1,
-      ext: '.m4a',
-      source: RecordingSource.realtime,
-    ),
-    _Recording(
-      id: 'r2',
-      name: 'Bosque_norte_01',
-      dateTime: DateTime(2025, 5, 7, 18, 5),
-      duration: const Duration(seconds: 27),
-      sizeMb: 1.6,
-      ext: '.mp3',
-      source: RecordingSource.uploaded,
-    ),
-    _Recording(
-      id: 'r3',
-      name: 'Humedal_sur_amanecer',
-      dateTime: DateTime(2025, 5, 4, 5, 55),
-      duration: const Duration(seconds: 31),
-      sizeMb: 1.8,
-      ext: '.wav',
-      source: RecordingSource.realtime,
-    ),
-    _Recording(
-      id: 'r4',
-      name: 'Parque_central_02',
-      dateTime: DateTime(2025, 4, 29, 16, 20),
-      duration: const Duration(seconds: 44),
-      sizeMb: 2.4,
-      ext: '.mp3',
-      source: RecordingSource.uploaded,
-    ),
-    _Recording(
-      id: 'r5',
-      name: 'Selva_baja_03',
-      dateTime: DateTime(2025, 4, 15, 10, 15),
-      duration: const Duration(seconds: 36),
-      sizeMb: 2.0,
-      ext: '.m4a',
-      source: RecordingSource.realtime,
-    ),
-  ];
-
+  final List<_Recording> _all = [];
   final Set<String> _selected = {};
+
+  // Repro
+  final AudioPlayer _player = AudioPlayer();
+  String? _playingPath;
+
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRecordings();
+    _player.onPlayerComplete.listen((event) {
+      setState(() => _playingPath = null);
+    });
+  }
+
+  @override
+  void dispose() {
+    _search.dispose();
+    _player.dispose();
+    super.dispose();
+  }
+
+  bool get selectionMode => _selected.isNotEmpty;
 
   List<_Recording> get _filtered {
     final q = _search.text.trim().toLowerCase();
     return _all.where((r) {
-      final byFilter = _filter == RecordingSource.all || r.source == _filter;
       final byQuery = q.isEmpty || r.name.toLowerCase().contains(q);
-      return byFilter && byQuery;
+      return byQuery;
     }).toList();
   }
 
-  bool get selectionMode => _selected.isNotEmpty;
+  Future<void> _loadRecordings() async {
+    setState(() {
+      _loading = true;
+      _selected.clear();
+    });
+
+    final docs = await getApplicationDocumentsDirectory();
+    final dir = Directory('${docs.path}/recordings');
+    if (!await dir.exists()) {
+      setState(() {
+        _all.clear();
+        _loading = false;
+      });
+      return;
+    }
+
+    final files = await dir
+        .list()
+        .where((e) => e is File && e.path.toLowerCase().endsWith('.wav'))
+        .cast<File>()
+        .toList();
+
+    final items = <_Recording>[];
+    for (final f in files) {
+      try {
+        final stat = await f.stat();
+        final sizeBytes = stat.size;
+        final dur = await _wavDuration(f); // calcula usando cabecera/fómula
+        items.add(
+          _Recording(
+            id: f.path,
+            path: f.path,
+            name: _niceNameFromPath(f.path),
+            dateTime: stat.modified,
+            duration: dur,
+            sizeMb: sizeBytes / (1024 * 1024),
+            ext: '.wav',
+          ),
+        );
+      } catch (_) {
+        // ignorar archivos problemáticos
+      }
+    }
+
+    // Orden: más nuevos primero
+    items.sort((a, b) => b.dateTime.compareTo(a.dateTime));
+
+    setState(() {
+      _all
+        ..clear()
+        ..addAll(items);
+      _loading = false;
+    });
+  }
+
+  String _niceNameFromPath(String p) {
+    final base = p.split(Platform.pathSeparator).last;
+    return base.replaceAll('.wav', '');
+  }
+
+  Future<Duration> _wavDuration(File f) async {
+    // Cálculo rápido para WAV PCM 16kHz, 16-bit, mono (como graba tu app)
+    // duration = (dataBytes) / (sr * ch * (bits/8))
+    const sr = 16000;
+    const ch = 1;
+    const bits = 16;
+    final length = await f.length();
+    final dataBytes = math.max<int>(0, length - 44); // 44 bytes header RIFF
+    final secs = dataBytes / (sr * ch * (bits / 8));
+    return Duration(milliseconds: (secs * 1000).round());
+  }
 
   void _toggleSelect(String id) {
     setState(() {
@@ -87,24 +136,125 @@ class _RecordingsScreenState extends State<RecordingsScreen> {
 
   void _clearSelection() => setState(_selected.clear);
 
-  void _deleteSelected() {
-    if (_selected.isEmpty) return;
-    setState(() {
-      _all.removeWhere((e) => _selected.contains(e.id));
-      _selected.clear();
-    });
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Eliminadas ${_selected.length} grabaciones'),
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
+  Future<void> _deleteOne(_Recording r) async {
+    try {
+      final f = File(r.path);
+      if (await f.exists()) await f.delete();
+      setState(() => _all.removeWhere((e) => e.id == r.id));
+      if (_playingPath == r.path) {
+        await _player.stop();
+        setState(() => _playingPath = null);
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Grabación eliminada'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('No se pudo eliminar: $e'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
   }
 
-  @override
-  void dispose() {
-    _search.dispose();
-    super.dispose();
+  Future<void> _deleteSelected() async {
+    final toDelete = _all.where((e) => _selected.contains(e.id)).toList();
+    for (final r in toDelete) {
+      await _deleteOne(r);
+    }
+    _selected.clear();
+    setState(() {});
+  }
+
+  Future<void> _shareOne(_Recording r) async {
+    try {
+      await Share.shareXFiles([XFile(r.path)], text: r.name);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('No se pudo compartir: $e'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _playOrPause(_Recording r) async {
+    // Si ya está reproduciendo este, pausar
+    if (_playingPath == r.path) {
+      await _player.stop();
+      setState(() => _playingPath = null);
+      return;
+    }
+
+    // Si estaba otro sonando, deténlo
+    if (_playingPath != null) {
+      await _player.stop();
+    }
+
+    // Reproducir este
+    await _player.play(DeviceFileSource(r.path));
+    setState(() => _playingPath = r.path);
+  }
+
+  void _reanalyze(_Recording r) {
+    Navigator.pushNamed(context, Routes.searching, arguments: r.path);
+  }
+
+  void _showDetails(_Recording r) {
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: const [
+                Icon(Icons.info_outline, color: kBrand),
+                SizedBox(width: 8),
+                Text(
+                  'Detalles',
+                  style: TextStyle(fontWeight: FontWeight.w800, fontSize: 18),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            _kv('Nombre', r.name),
+            _kv('Fecha', r.dateTime.formatNice()),
+            _kv('Duración', r.duration.formatNice()),
+            _kv('Tamaño', '${r.sizeMb.toStringAsFixed(2)} MB'),
+            _kv('Ruta', r.path),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                OutlinedButton.icon(
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(Icons.close),
+                  label: const Text('Cerrar'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -115,7 +265,7 @@ class _RecordingsScreenState extends State<RecordingsScreen> {
       backgroundColor: kBg,
       body: CustomScrollView(
         slivers: [
-          // ===== Encabezado =====
+          // ===== Encabezado con botón atrás =====
           SliverAppBar(
             backgroundColor: kBrand,
             pinned: true,
@@ -124,19 +274,34 @@ class _RecordingsScreenState extends State<RecordingsScreen> {
             shape: const RoundedRectangleBorder(
               borderRadius: BorderRadius.vertical(bottom: Radius.circular(28)),
             ),
-            leading: selectionMode
-                ? IconButton(
-                    onPressed: _clearSelection,
-                    icon: const Icon(Icons.close, color: Colors.white),
-                  )
-                : null,
+            automaticallyImplyLeading: false,
+            leadingWidth: 56,
+            leading: IconButton(
+              icon: Icon(
+                selectionMode ? Icons.close : Icons.arrow_back_rounded,
+                color: Colors.white,
+              ),
+              onPressed: () {
+                if (selectionMode) {
+                  _clearSelection();
+                } else {
+                  final nav = Navigator.of(context);
+                  if (nav.canPop()) {
+                    nav.pop();
+                  } else {
+                    nav.pushReplacementNamed(Routes.home);
+                  }
+                }
+              },
+              tooltip: selectionMode ? 'Cancelar selección' : 'Atrás',
+            ),
             title: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Icon(
                   selectionMode
                       ? Icons.checklist_rounded
-                      : Icons.graphic_eq_rounded,
+                      : Icons.library_music_rounded,
                   color: Colors.white,
                 ),
                 const SizedBox(width: 8),
@@ -152,81 +317,56 @@ class _RecordingsScreenState extends State<RecordingsScreen> {
                 ),
               ],
             ),
-            actions: selectionMode
-                ? [
-                    IconButton(
-                      onPressed: _deleteSelected,
-                      icon: const Icon(
-                        Icons.delete_outline,
-                        color: Colors.white,
-                      ),
-                      tooltip: 'Eliminar seleccionadas',
-                    ),
-                  ]
-                : null,
+            actions: [
+              if (!selectionMode)
+                IconButton(
+                  onPressed: _loadRecordings,
+                  icon: const Icon(Icons.refresh_rounded, color: Colors.white),
+                  tooltip: 'Actualizar',
+                ),
+              if (selectionMode)
+                IconButton(
+                  onPressed: _deleteSelected,
+                  icon: const Icon(Icons.delete_outline, color: Colors.white),
+                  tooltip: 'Eliminar seleccionadas',
+                ),
+            ],
           ),
 
-          // ===== Buscador + Filtros =====
+          // ===== Buscador =====
           SliverToBoxAdapter(
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 18, 16, 8),
-              child: Column(
-                children: [
-                  // Buscador
-                  TextField(
-                    controller: _search,
-                    onChanged: (_) => setState(() {}),
-                    decoration: InputDecoration(
-                      hintText: 'Buscar por nombre',
-                      prefixIcon: const Icon(Icons.search),
-                      filled: true,
-                      fillColor: Colors.white,
-                      contentPadding: const EdgeInsets.symmetric(
-                        vertical: 12,
-                        horizontal: 14,
-                      ),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(14),
-                        borderSide: BorderSide.none,
-                      ),
-                    ),
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+              child: TextField(
+                controller: _search,
+                onChanged: (_) => setState(() {}),
+                decoration: InputDecoration(
+                  hintText: 'Buscar por nombre…',
+                  prefixIcon: const Icon(Icons.search_rounded),
+                  filled: true,
+                  fillColor: Colors.white,
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
                   ),
-                  const SizedBox(height: 12),
-                  // Filtros
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      _FilterChip(
-                        label: 'Todo',
-                        selected: _filter == RecordingSource.all,
-                        onSelected: () =>
-                            setState(() => _filter = RecordingSource.all),
-                      ),
-                      const SizedBox(width: 8),
-                      _FilterChip(
-                        label: 'Tiempo real',
-                        icon: Icons.wifi_tethering_rounded,
-                        selected: _filter == RecordingSource.realtime,
-                        onSelected: () =>
-                            setState(() => _filter = RecordingSource.realtime),
-                      ),
-                      const SizedBox(width: 8),
-                      _FilterChip(
-                        label: 'Subidos',
-                        icon: Icons.upload_rounded,
-                        selected: _filter == RecordingSource.uploaded,
-                        onSelected: () =>
-                            setState(() => _filter = RecordingSource.uploaded),
-                      ),
-                    ],
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide.none,
                   ),
-                ],
+                ),
               ),
             ),
           ),
 
-          // ===== Lista =====
-          if (items.isEmpty)
+          // ===== Lista / vacío / cargando =====
+          if (_loading)
+            const SliverToBoxAdapter(
+              child: Padding(
+                padding: EdgeInsets.only(top: 80),
+                child: Center(child: CircularProgressIndicator()),
+              ),
+            )
+          else if (items.isEmpty)
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.only(top: 60),
@@ -247,7 +387,7 @@ class _RecordingsScreenState extends State<RecordingsScreen> {
                     ),
                     SizedBox(height: 6),
                     Text(
-                      'Empieza en “Tiempo real” o sube un audio desde “Subir audio”.',
+                      'Graba en “Tiempo real” con el auto-guardado activo o vuelve luego.',
                       textAlign: TextAlign.center,
                       style: TextStyle(color: Colors.black54),
                     ),
@@ -261,38 +401,25 @@ class _RecordingsScreenState extends State<RecordingsScreen> {
               itemBuilder: (context, i) {
                 final r = items[i];
                 final selected = _selected.contains(r.id);
+                final isPlaying = _playingPath == r.path;
                 return Padding(
                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
                   child: _RecordingTile(
                     recording: r,
                     selected: selected,
+                    isPlaying: isPlaying,
                     onTap: () {
                       if (selectionMode) {
                         _toggleSelect(r.id);
                       } else {
-                        // Abrimos Resultado como simulación de "reproducir"
-                        Navigator.pushNamed(context, Routes.result);
+                        _playOrPause(r);
                       }
                     },
                     onLongPress: () => _toggleSelect(r.id),
                     onMore: () => _showDetails(r),
-                    onDelete: () {
-                      setState(() => _all.removeWhere((e) => e.id == r.id));
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Grabación eliminada'),
-                          behavior: SnackBarBehavior.floating,
-                        ),
-                      );
-                    },
-                    onShare: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Compartir (demo)'),
-                          behavior: SnackBarBehavior.floating,
-                        ),
-                      );
-                    },
+                    onDelete: () => _deleteOne(r),
+                    onShare: () => _shareOne(r),
+                    onReanalyze: () => _reanalyze(r),
                   ),
                 );
               },
@@ -300,56 +427,6 @@ class _RecordingsScreenState extends State<RecordingsScreen> {
 
           const SliverToBoxAdapter(child: SizedBox(height: 20)),
         ],
-      ),
-    );
-  }
-
-  void _showDetails(_Recording r) {
-    showModalBottomSheet(
-      context: context,
-      showDragHandle: true,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (_) => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Icon(Icons.info_outline, color: kBrand),
-                const SizedBox(width: 8),
-                const Text(
-                  'Detalles',
-                  style: TextStyle(fontWeight: FontWeight.w800, fontSize: 18),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            _kv('Nombre', r.name),
-            _kv('Fecha', r.dateTime.formatNice()),
-            _kv('Duración', r.duration.formatNice()),
-            _kv(
-              'Origen',
-              r.source == RecordingSource.realtime ? 'Tiempo real' : 'Subido',
-            ),
-            _kv('Tamaño', '${r.sizeMb.toStringAsFixed(1)} MB'),
-            _kv('Extensión', r.ext),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                OutlinedButton.icon(
-                  onPressed: () => Navigator.pop(context),
-                  icon: const Icon(Icons.close),
-                  label: const Text('Cerrar'),
-                ),
-              ],
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -361,20 +438,24 @@ class _RecordingTile extends StatelessWidget {
   const _RecordingTile({
     required this.recording,
     required this.selected,
+    required this.isPlaying,
     required this.onTap,
     required this.onLongPress,
     required this.onMore,
     required this.onDelete,
     required this.onShare,
+    required this.onReanalyze,
   });
 
   final _Recording recording;
   final bool selected;
+  final bool isPlaying;
   final VoidCallback onTap;
   final VoidCallback onLongPress;
   final VoidCallback onMore;
   final VoidCallback onDelete;
   final VoidCallback onShare;
+  final VoidCallback onReanalyze;
 
   @override
   Widget build(BuildContext context) {
@@ -393,7 +474,7 @@ class _RecordingTile extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
           child: Row(
             children: [
-              // Avatar / check de selección
+              // Avatar / check de selección / play
               Container(
                 width: 44,
                 height: 44,
@@ -402,7 +483,11 @@ class _RecordingTile extends StatelessWidget {
                   shape: BoxShape.circle,
                 ),
                 child: Icon(
-                  selected ? Icons.check : Icons.graphic_eq_rounded,
+                  selected
+                      ? Icons.check
+                      : (isPlaying
+                            ? Icons.pause_circle_filled_rounded
+                            : Icons.play_circle_fill_rounded),
                   color: selected ? Colors.white : kBrand,
                 ),
               ),
@@ -424,14 +509,14 @@ class _RecordingTile extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      '${recording.dateTime.formatNice()}  •  ${recording.duration.formatNice()}',
+                      '${recording.dateTime.formatNice()}  •  ${recording.duration.formatNice()}  •  ${recording.sizeMb.toStringAsFixed(2)} MB',
                       style: const TextStyle(color: Colors.black54),
                     ),
                   ],
                 ),
               ),
 
-              // Acciones (compactas + FittedBox para evitar overflow)
+              // Acciones
               FittedBox(
                 fit: BoxFit.scaleDown,
                 child: Row(
@@ -458,6 +543,18 @@ class _RecordingTile extends StatelessWidget {
                       padding: EdgeInsets.zero,
                       constraints: constraints,
                       iconSize: iconSize,
+                      tooltip: 'Volver a analizar',
+                      onPressed: onReanalyze,
+                      icon: const Icon(
+                        Icons.manage_search_rounded,
+                        color: kBrand,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    IconButton(
+                      padding: EdgeInsets.zero,
+                      constraints: constraints,
+                      iconSize: iconSize,
                       tooltip: 'Eliminar',
                       onPressed: onDelete,
                       icon: const Icon(Icons.delete_outline, color: kBrand),
@@ -473,91 +570,50 @@ class _RecordingTile extends StatelessWidget {
   }
 }
 
-class _FilterChip extends StatelessWidget {
-  const _FilterChip({
-    required this.label,
-    this.icon,
-    required this.selected,
-    required this.onSelected,
-  });
-
-  final String label;
-  final IconData? icon;
-  final bool selected;
-  final VoidCallback onSelected;
-
-  @override
-  Widget build(BuildContext context) {
-    return ChoiceChip(
-      selected: selected,
-      onSelected: (_) => onSelected(),
-      label: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (icon != null) ...[Icon(icon, size: 18), const SizedBox(width: 6)],
-          Text(label),
-        ],
-      ),
-      labelStyle: TextStyle(
-        color: selected ? Colors.white : Colors.black87,
-        fontWeight: FontWeight.w700,
-      ),
-      backgroundColor: Colors.white,
-      selectedColor: kBrand,
-      side: BorderSide(color: selected ? kBrand : const Color(0xFFE0E0E0)),
-      shape: const StadiumBorder(),
-    );
-  }
-}
-
 /* ============================== Modelo ============================== */
-
-enum RecordingSource { all, realtime, uploaded }
 
 class _Recording {
   final String id;
+  final String path;
   final String name;
   final DateTime dateTime;
   final Duration duration;
   final double sizeMb;
   final String ext;
-  final RecordingSource source;
 
   _Recording({
     required this.id,
+    required this.path,
     required this.name,
     required this.dateTime,
     required this.duration,
     required this.sizeMb,
     required this.ext,
-    required this.source,
   });
 }
 
 /* ============================== Utils =============================== */
 
-extension _Fmt on DateTime {
+extension _FmtDT on DateTime {
   String formatNice() {
-    // dd/MM/yyyy HH:mm
     final d = day.toString().padLeft(2, '0');
     final m = month.toString().padLeft(2, '0');
     final y = year.toString();
     final hh = hour.toString().padLeft(2, '0');
     final mm = minute.toString().padLeft(2, '0');
     return '$d/$m/$y $hh:$mm';
-    // Si prefieres 12h, ajusta aquí.
   }
 }
 
-extension _DurFmt on Duration {
+extension _FmtDur on Duration {
   String formatNice() {
-    final mm = inMinutes.remainder(60).toString().padLeft(2, '0');
-    final ss = inSeconds.remainder(60).toString().padLeft(2, '0');
-    return '$mm:$ss';
+    final h = inHours;
+    final m = inMinutes.remainder(60).toString().padLeft(2, '0');
+    final s = inSeconds.remainder(60).toString().padLeft(2, '0');
+    return h > 0 ? '$h:$m:$s' : '$m:$s';
   }
 }
 
-// --- Helper para una fila "clave : valor" en el bottom sheet ---
 Widget _kv(String key, String value) {
   return Padding(
     padding: const EdgeInsets.only(bottom: 8),
@@ -565,7 +621,7 @@ Widget _kv(String key, String value) {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         SizedBox(
-          width: 110, // ancho fijo para alinear claves
+          width: 110,
           child: Text(
             key,
             style: const TextStyle(

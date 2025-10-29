@@ -10,6 +10,8 @@ import 'package:record/record.dart';
 
 import '../../core/routes.dart';
 import '../../core/theme.dart';
+import '../../offline/offline_prefs.dart';
+import '../../widgets/blocking_loader.dart';
 
 class RealtimeScreen extends StatefulWidget {
   const RealtimeScreen({super.key});
@@ -26,6 +28,8 @@ class _RealtimeScreenState extends State<RealtimeScreen>
   String? _currentPath; // WAV final
   RandomAccessFile? _wavFile;
   int _wavDataBytes = 0;
+  bool _autoSaveActive =
+      false; // valor de la preferencia al iniciar cada grabación
 
   // Config stream PCM
   static const int _sr = 16000; // 16kHz
@@ -91,10 +95,16 @@ class _RealtimeScreenState extends State<RealtimeScreen>
   }
 
   // ===== WAV helpers =====
-  Future<String> _nextWavPath() async {
-    final dir = await getApplicationDocumentsDirectory();
-    final recDir = Directory('${dir.path}/recordings');
+  Future<String> _nextWavPath({required bool keep}) async {
+    // keep=true -> Documents/recordings  |  keep=false -> Temp/tmp
+    final base = keep
+        ? await getApplicationDocumentsDirectory()
+        : await getTemporaryDirectory();
+
+    final sub = keep ? 'recordings' : 'tmp';
+    final recDir = Directory('${base.path}/$sub');
     if (!await recDir.exists()) await recDir.create(recursive: true);
+
     final ts = DateTime.now().toIso8601String().replaceAll(':', '-');
     return '${recDir.path}/realtime_$ts.wav';
   }
@@ -255,9 +265,13 @@ class _RealtimeScreenState extends State<RealtimeScreen>
         return;
       }
     }
+    _autoSaveActive =
+        await OfflinePrefs.autoSaveRecordings; // 👈 leer preferencia
 
     // Prepara archivo WAV y header
-    final path = await _nextWavPath();
+    final path = await _nextWavPath(
+      keep: _autoSaveActive,
+    ); // 👈 ruta según preferencia
     final raf = await File(path).open(mode: FileMode.write);
     await _writeWavHeader(
       raf,
@@ -326,19 +340,61 @@ class _RealtimeScreenState extends State<RealtimeScreen>
   }
 
   Future<void> _stopRecordingAndSearch() async {
-    await _recorder.stop(); // corta stream PCM y amplitud
-    _timer?.cancel();
-    _ampSub?.cancel();
-    await _pcmSub?.cancel();
-    _fakeWaveTimer?.cancel();
+    // 1) abre loader (bloquea toques y botón atrás)
+    showBlockingLoader(context, message: 'Procesando audio…');
+    final started = DateTime.now();
 
-    // Finaliza header WAV (rellena tamaños)
-    await _finalizeWavHeaderIfOpen();
+    try {
+      // 2) detén captura/streams
+      await _recorder.stop();
+      _timer?.cancel();
+      await _ampSub?.cancel();
+      await _pcmSub?.cancel();
+      _fakeWaveTimer?.cancel();
 
-    setState(() => _isRecording = false);
+      // 3) finaliza header WAV y captura la ruta
+      await _finalizeWavHeaderIfOpen();
+      final pathForSearch = _currentPath;
 
-    if (!mounted) return;
-    Navigator.pushNamed(context, Routes.searching, arguments: _currentPath);
+      setState(() => _isRecording = false);
+
+      // 4) asegura que el loader se vea al menos 400 ms
+      final elapsed = DateTime.now().difference(started);
+      const minMs = 400;
+      if (elapsed.inMilliseconds < minMs) {
+        await Future.delayed(
+          Duration(milliseconds: minMs - elapsed.inMilliseconds),
+        );
+      }
+
+      if (!mounted) return;
+
+      // 5) cierra loader y navega a la pantalla de “buscando / resultados”
+      Navigator.pop(context); // cierra el loader
+
+      Navigator.pushNamed(
+        context,
+        Routes.searching, // tu pantalla que procesa y muestra resultados
+        arguments: pathForSearch,
+      ).then((_) async {
+        // 6) limpieza si no se autosalva
+        if (!_autoSaveActive && pathForSearch != null) {
+          try {
+            final f = File(pathForSearch);
+            if (await f.exists()) await f.delete();
+          } catch (_) {
+            /* opcional: log */
+          }
+        }
+      });
+    } catch (e) {
+      if (!mounted) return;
+      // cierra loader si hubo error y notifica
+      Navigator.pop(context);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error al procesar: $e')));
+    }
   }
 
   // ===== UI =====

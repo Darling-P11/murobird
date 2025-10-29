@@ -20,6 +20,20 @@ class HelpScreen extends StatelessWidget {
             shape: const RoundedRectangleBorder(
               borderRadius: BorderRadius.vertical(bottom: Radius.circular(28)),
             ),
+            automaticallyImplyLeading: false,
+            leadingWidth: 56,
+            leading: IconButton(
+              icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
+              tooltip: 'Atrás',
+              onPressed: () {
+                final nav = Navigator.of(context);
+                if (nav.canPop()) {
+                  nav.pop();
+                } else {
+                  nav.pushReplacementNamed(Routes.home);
+                }
+              },
+            ),
             title: Row(
               mainAxisSize: MainAxisSize.min,
               children: const [
@@ -70,7 +84,7 @@ class HelpScreen extends StatelessWidget {
                   ),
                   const SizedBox(height: 16),
 
-                  // ===== Mejores resultados
+                  // ===== Consejos
                   _SectionCard(
                     icon: Icons.tips_and_updates_rounded,
                     title: 'Consejos para mejores resultados',
@@ -78,12 +92,14 @@ class HelpScreen extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: const [
                         _Bullet('Graba entre 10 y 30 segundos.'),
-                        _Bullet('Evita viento fuerte y ruido de autos/vozes.'),
+                        _Bullet('Evita viento fuerte y ruido de autos/voces.'),
                         _Bullet(
                           'Acércate (sin perturbar) y apunta el micrófono.',
                         ),
                         _Bullet('Si puedes, usa un protector antiviento.'),
-                        _Bullet('En “Subir audio” acepta .mp3, .wav y .m4a.'),
+                        _Bullet(
+                          'En “Subir audio” solo se acepta formato .wav ',
+                        ),
                       ],
                     ),
                   ),
@@ -101,15 +117,15 @@ class HelpScreen extends StatelessWidget {
                         ),
                         _Faq(
                           q: '¿Necesito internet?',
-                          a: 'Para este prototipo el flujo de navegación es local. En producción ciertos análisis y descargas de datos podrían requerir conexión.',
+                          a: 'En producción ciertos análisis y descargas de datos podrían requerir conexión.',
                         ),
                         _Faq(
                           q: '¿Qué permisos usa?',
-                          a: 'Sólo el micrófono para capturar audio en tiempo real. Puedes gestionar los permisos desde Configuración > Permisos.',
+                          a: 'Principalmente el micrófono para capturar audio en tiempo real. Puedes gestionarlos desde Configuración > Permisos.',
                         ),
                         _Faq(
                           q: '¿Qué formatos de audio admite?',
-                          a: '.mp3, .wav y .m4a (30 s mínimo, 30 min máximo).',
+                          a: 'Solo fomato .wav (30 s mínimo, 30 min máximo).',
                         ),
                         _Faq(
                           q: '¿Cómo leo el espectrograma?',
@@ -121,39 +137,7 @@ class HelpScreen extends StatelessWidget {
                   const SizedBox(height: 16),
 
                   // ===== Privacidad
-                  _SectionCard(
-                    icon: Icons.privacy_tip_outlined,
-                    title: 'Privacidad y uso de datos',
-                    child: const Text(
-                      'MuroBird procesa tus grabaciones únicamente para identificar el ave y mostrar su información. '
-                      'No compartimos tus audios sin tu consentimiento. Puedes borrar grabaciones desde “Grabaciones”.',
-                      style: TextStyle(fontSize: 16, height: 1.35),
-                    ),
-                  ),
                   const SizedBox(height: 22),
-
-                  // ===== Atajos rápidos
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _CTAButton(
-                          icon: Icons.wifi_tethering_rounded,
-                          label: 'Tiempo real',
-                          onTap: () =>
-                              Navigator.pushNamed(context, Routes.realtime),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: _CTAButton(
-                          icon: Icons.upload_rounded,
-                          label: 'Subir audio',
-                          onTap: () =>
-                              Navigator.pushNamed(context, Routes.upload),
-                        ),
-                      ),
-                    ],
-                  ),
                 ],
               ),
             ),

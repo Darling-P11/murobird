@@ -90,7 +90,7 @@ class _BottomNavScaffoldState extends State<BottomNavScaffold> {
                       child: _SegmentRow(
                         rightRounded: true,
                         items: [
-                          _ItemData(Icons.history, 'Historial'),
+                          _ItemData(Icons.photo_library, 'Colección'),
                           _ItemData(
                             Icons.settings,
                             compact ? 'Config' : 'Configuración',

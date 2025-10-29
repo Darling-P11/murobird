@@ -15,7 +15,8 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   // Estados demo (prototipo)
   bool _darkMode = false;
-  bool _saveAuto = true;
+  bool _saveAuto = false; // valor inicial; luego se carga desde prefs
+
   bool _haptics = true;
   bool _uiSounds = false;
   bool _tips = true;
@@ -36,6 +37,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _loadPrefs() async {
     _offlineEnabled = await OfflinePrefs.enabled;
+    _saveAuto = await OfflinePrefs.autoSaveRecordings; // 👈 añadido
     setState(() {});
   }
 
@@ -91,6 +93,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
             shape: const RoundedRectangleBorder(
               borderRadius: BorderRadius.vertical(bottom: Radius.circular(28)),
             ),
+
+            // 👇 Forzar botón atrás visible y funcional SIEMPRE
+            automaticallyImplyLeading: false,
+            leadingWidth: 56,
+            leading: IconButton(
+              icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
+              onPressed: () {
+                final nav = Navigator.of(context);
+                if (nav.canPop()) {
+                  nav.pop();
+                } else {
+                  // Si esta pantalla es raíz (no hay stack atrás), vuelve a Home
+                  nav.pushReplacementNamed(Routes.home);
+                  // (o usa go_router: context.go(Routes.homePath); si tienes path)
+                }
+              },
+              tooltip: 'Atrás',
+            ),
+
             title: Row(
               mainAxisSize: MainAxisSize.min,
               children: const [
@@ -125,7 +146,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             color: kBrand,
                           ),
                           title: 'Acerca de MuroBird',
-                          subtitle: 'Versión 1.0.0 (demo)',
+                          subtitle: 'Versión 1.0',
                           onTap: () =>
                               Navigator.pushNamed(context, Routes.about),
                         ),
@@ -173,8 +194,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           title: 'Guardar automáticamente las grabaciones',
                           subtitle: 'Se guardan en “Grabaciones” al finalizar',
                           value: _saveAuto,
-                          onChanged: (v) => setState(() => _saveAuto = v),
+                          onChanged: (v) async {
+                            await OfflinePrefs.setAutoSaveRecordings(v);
+                            setState(() => _saveAuto = v);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  v
+                                      ? 'Guardado automático ACTIVADO: las grabaciones se almacenarán localmente.'
+                                      : 'Guardado automático DESACTIVADO.',
+                                ),
+                              ),
+                            );
+                          },
                         ),
+
                         const Divider(height: 1),
                         // Otros switches que ya tenías podrían ir aquí...
                       ],
@@ -357,37 +391,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
 
                         const Divider(height: 1),
-
-                        // (Opcionales) tus acciones previas
-                        _DangerTile(
-                          leading: const Icon(
-                            Icons.delete_sweep_rounded,
-                            color: Colors.red,
-                          ),
-                          title: 'Borrar historial',
-                          onTap: () => _confirm(
-                            context,
-                            title: 'Borrar historial',
-                            message:
-                                'Se eliminarán todas las entradas del historial. Esta acción no se puede deshacer.',
-                            onOk: () => _ok('Historial borrado'),
-                          ),
-                        ),
-                        const Divider(height: 1),
-                        _DangerTile(
-                          leading: const Icon(
-                            Icons.delete_rounded,
-                            color: Colors.red,
-                          ),
-                          title: 'Borrar grabaciones locales',
-                          onTap: () => _confirm(
-                            context,
-                            title: 'Borrar grabaciones',
-                            message:
-                                'Se eliminarán las grabaciones guardadas en el dispositivo (demo).',
-                            onOk: () => _ok('Grabaciones borradas'),
-                          ),
-                        ),
                       ],
                     ),
                   ),

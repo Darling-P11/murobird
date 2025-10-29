@@ -6,6 +6,15 @@ class OfflinePrefs {
   static const _kReady = 'offline_ready';
   static const _kBaseDir = 'offline_base_dir';
 
+  // ===== NUEVO: auto guardado de grabaciones =====
+  static const _kAutoSave = 'auto_save_recordings';
+
+  static Future<bool> get autoSaveRecordings async =>
+      (await SharedPreferences.getInstance()).getBool(_kAutoSave) ?? false;
+
+  static Future<void> setAutoSaveRecordings(bool v) async =>
+      (await SharedPreferences.getInstance()).setBool(_kAutoSave, v);
+
   static Future<bool> get enabled async =>
       (await SharedPreferences.getInstance()).getBool(_kEnabled) ?? false;
 
