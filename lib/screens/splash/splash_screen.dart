@@ -3,6 +3,11 @@ import 'package:permission_handler/permission_handler.dart';
 import '../../core/routes.dart';
 import '../../core/theme.dart';
 
+// === Offline ===
+import 'package:connectivity_plus/connectivity_plus.dart';
+import '../../offline/offline_prefs.dart';
+import '../../offline/offline_manager.dart';
+
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
   @override
@@ -17,19 +22,41 @@ class _SplashScreenState extends State<SplashScreen> {
   }
 
   Future<void> _decideNext() async {
-    // Mantén tu breve animación de splash
+    // Breve animación de splash
     await Future.delayed(const Duration(milliseconds: 1400));
 
     // Revisa el estado del permiso de micrófono
     final status = await Permission.microphone.status;
     if (!mounted) return;
 
-    if (status.isGranted) {
-      Navigator.pushReplacementNamed(context, Routes.home);
-    } else {
+    if (!status.isGranted) {
       // Si está denegado o permanentemente denegado, ve a la pantalla de permisos
       Navigator.pushReplacementNamed(context, Routes.permissions);
+      return;
     }
+
+    // === Lógica de inicio OFFLINE (silenciosa) ===
+    try {
+      final offlineOn = await OfflinePrefs.enabled;
+      final ready = await OfflineManager.isReady();
+
+      if (offlineOn && !ready) {
+        // Si el usuario quiere offline pero aún no hay paquete,
+        // intentamos descargar e instalar en segundo plano.
+        final conn = await Connectivity().checkConnectivity();
+        if (conn != ConnectivityResult.none) {
+          // Descarga sin progreso (rápida de integrar en splash).
+          await OfflineManager.downloadAndInstall();
+        }
+        // Si no hay conexión, simplemente seguimos a Home (no bloqueamos el arranque).
+      }
+    } catch (_) {
+      // Silencioso: no interrumpimos el flujo de arranque si falla.
+    }
+
+    if (!mounted) return;
+    // Listo: vamos al Home
+    Navigator.pushReplacementNamed(context, Routes.home);
   }
 
   @override

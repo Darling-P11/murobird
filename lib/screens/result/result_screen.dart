@@ -1,5 +1,7 @@
+// lib/screens/result/result_screen.dart
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:audioplayers/audioplayers.dart';
 
 import '../../core/theme.dart';
 import '../../services/wiki_bird_service.dart';
@@ -8,6 +10,15 @@ import '../../widgets/distribution_map.dart';
 import '../../widgets/reference_audios.dart';
 import '../../widgets/species_gallery_grid.dart';
 import '../../widgets/spectrogram_card.dart';
+
+// OFFLINE
+import 'dart:io';
+import '../../offline/offline_prefs.dart';
+import '../../offline/offline_manager.dart';
+import '../../offline/offline_models.dart';
+import '../../widgets/distribution_map_offline.dart';
+import 'package:flutter/painting.dart'
+    show PaintingBinding; // <- para limpiar caché de imágenes
 
 /// ---------------- helpers binomiales / limpieza ----------------
 String _stripHtml(String s) => s.replaceAll(RegExp(r'<[^>]+>'), '');
@@ -28,16 +39,32 @@ String _cleanLabel(String raw) {
   return latin ?? norm;
 }
 
-bool _isSupportedImage(String url) {
+/// Acepta URL http(s) o ruta local; si no, placeholder.
+ImageProvider _imgProvider(String? src) {
+  if (src == null || src.isEmpty) {
+    return const AssetImage('assets/mock/placeholder.jpg');
+  }
+  final s = src.toLowerCase();
+  if (s.startsWith('http')) {
+    // filtra svg / data
+    if (s.startsWith('data:'))
+      return const AssetImage('assets/mock/placeholder.jpg');
+    if (s.endsWith('.svg') || s.contains('format=svg')) {
+      return const AssetImage('assets/mock/placeholder.jpg');
+    }
+    return NetworkImage(src);
+  }
+  // ¿archivo local?
+  final f = File(src);
+  if (f.existsSync()) return FileImage(f);
+  return const AssetImage('assets/mock/placeholder.jpg');
+}
+
+bool _isSupportedNetImage(String url) {
   final u = url.toLowerCase();
   if (u.startsWith('data:')) return false;
   if (u.endsWith('.svg') || u.contains('format=svg')) return false;
   return u.startsWith('http');
-}
-
-ImageProvider _netOrFallback(String? url) {
-  if (url != null && _isSupportedImage(url)) return NetworkImage(url);
-  return const AssetImage('assets/mock/placeholder.jpg');
 }
 
 /// normaliza para comparar duplicados
@@ -59,6 +86,20 @@ class ResultScreen extends StatefulWidget {
 class _ResultScreenState extends State<ResultScreen> {
   late final List<_Candidate> _views; // máx 3
   int _current = 0;
+  // <--- pega aquí
+  Future<dynamic> _loadDetails(String currentName) async {
+    final offline = await OfflinePrefs.enabled;
+    final ready = await OfflineManager.isReady();
+    if (offline && ready) {
+      final m = await OfflineManager.findByScientificName(currentName);
+      if (m == null) return null;
+      final adapted = await OfflineManager.adaptAssets(m);
+      return OfflineBirdDetails.fromDb(adapted);
+    } else {
+      return await WikiBirdService.fetch(currentName);
+    }
+  }
+  // <--- hasta aquí
 
   @override
   void didChangeDependencies() {
@@ -97,29 +138,66 @@ class _ResultScreenState extends State<ResultScreen> {
 
     return Scaffold(
       backgroundColor: Colors.white,
-      body: FutureBuilder<BirdDetails?>(
-        future: WikiBirdService.fetch(currentName),
+      body: FutureBuilder<dynamic>(
+        key: ValueKey(
+          'fb-$currentName',
+        ), // <- fuerza reconstrucción al cambiar de especie
+        future: _loadDetails(currentName), // <- evita capturar valores viejos
+
         builder: (context, snap) {
           final waiting =
               snap.connectionState == ConnectionState.waiting && !snap.hasData;
           final data = snap.data;
 
-          // determinar nombre científico robusto
-          final fromTitle = _asLatin(data?.displayTitle ?? '');
-          final fromSci = _asLatin(data?.scientificName ?? '');
-          final sciName = (fromTitle ?? fromSci ?? _asLatin(currentName) ?? '')
-              .trim();
-
-          // imagen principal (hero) y miniatura de respaldo
-          final hero =
-              (data?.mainImage != null && _isSupportedImage(data!.mainImage!))
-              ? data!.mainImage!
+          final bool isOffline = data is OfflineBirdDetails;
+          final OfflineBirdDetails? off = isOffline
+              ? data as OfflineBirdDetails
               : null;
-          final List<String> gal = (data?.gallery ?? [])
+          final BirdDetails? onl = !isOffline ? data as BirdDetails? : null;
+
+          // ===== DEBUG: verifica que cambian los archivos por especie =====
+          if (isOffline && off != null) {
+            debugPrint('[OFF] $currentName | $off');
+            debugPrint(' cover: ${off.coverImage}');
+            debugPrint(
+              ' spec : ${off.spectrograms.isNotEmpty ? off.spectrograms.first : "-"}',
+            );
+            debugPrint(' geo  : ${off.distributionGeoJson}');
+            debugPrint(' audio: ${off.audios}');
+          } else {
+            debugPrint('[ONLINE] $currentName');
+          }
+          // ===== FIN DEBUG =================================================
+
+          // título y nombre científico unificados
+          final sciName = isOffline
+              ? off!.scientificName
+              : (_asLatin(onl?.displayTitle ?? '') ??
+                        _asLatin(onl?.scientificName ?? '') ??
+                        _asLatin(currentName) ??
+                        '')
+                    .trim();
+
+          final displayTitle = isOffline
+              ? (off!.displayTitle.isNotEmpty ? off.displayTitle : currentName)
+              : (_cleanLabel(onl?.displayTitle ?? currentName));
+
+          // imagen principal (hero) y miniatura
+          final heroSrc = isOffline
+              ? (off!.coverImage ?? '')
+              : (onl?.mainImage ?? '');
+          final hero = (heroSrc.isNotEmpty) ? heroSrc : null;
+
+          final List<String> galNet = (onl?.gallery ?? [])
               .whereType<String>()
-              .where(_isSupportedImage)
+              .where(_isSupportedNetImage)
               .toList();
-          final thumbUrl = hero ?? (gal.isNotEmpty ? gal.first : null);
+
+          final thumbUrl =
+              hero ??
+              (isOffline
+                  ? (off!.gallery.isNotEmpty ? off.gallery.first : null)
+                  : (galNet.isNotEmpty ? galNet.first : null));
 
           // cachea para usar en los avatares laterales
           if (thumbUrl != null && _views[_current].lastMainImage == null) {
@@ -135,20 +213,27 @@ class _ResultScreenState extends State<ResultScreen> {
           return SafeArea(
             child: CustomScrollView(
               slivers: [
-                // ========== HEADER ==========
                 SliverToBoxAdapter(
                   child: _Header(
+                    key: ValueKey('head-$sciName'), // ← NUEVO
                     index: _current,
                     total: _views.length,
                     onBack: () => Navigator.pop(context),
-                    onPickIndex: (i) => setState(() => _current = i),
+                    onPickIndex: (i) {
+                      setState(() => _current = i);
+
+                      // ← IMPORTANTE: limpiar caché de imágenes al cambiar de especie
+                      PaintingBinding.instance.imageCache.clear();
+                      PaintingBinding.instance.imageCache.clearLiveImages();
+                    },
+
                     onShare: () {
                       final uri = Uri.parse(
                         'https://www.google.com/search?q=$currentName ave',
                       );
                       launchUrl(uri, mode: LaunchMode.externalApplication);
                     },
-                    // imágenes
+                    // imágenes (aceptan ruta local o url)
                     mainImage: hero,
                     sideLeftImage: leftIndex != null
                         ? _views[leftIndex].lastMainImage
@@ -158,9 +243,7 @@ class _ResultScreenState extends State<ResultScreen> {
                         : null,
 
                     // textos del pill
-                    displayTitle: _cleanLabel(
-                      data?.displayTitle ?? currentName,
-                    ),
+                    displayTitle: displayTitle,
                     alsoKnown: '—', // por ahora sin aliases
                     scientific: sciName,
                     familyTitle: (sciName.isNotEmpty
@@ -192,9 +275,14 @@ class _ResultScreenState extends State<ResultScreen> {
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          (data?.summary ??
-                                  'No encontramos una descripción para esta especie. Intenta con otro nombre o revisa tu grabación.')
-                              .trim(),
+                          isOffline
+                              ? ((off!.descriptionEs ??
+                                        off.descriptionEn ??
+                                        'Sin descripción.')
+                                    .trim())
+                              : ((onl?.summary ??
+                                        'No encontramos una descripción para esta especie. Intenta con otro nombre o revisa tu grabación.')
+                                    .trim()),
                           style: const TextStyle(
                             fontSize: 16,
                             height: 1.35,
@@ -208,11 +296,14 @@ class _ResultScreenState extends State<ResultScreen> {
                           title: 'Audios de referencia',
                         ),
                         const SizedBox(height: 8),
-                        if (sciName.isNotEmpty)
+                        if (isOffline && (off!.audios.isNotEmpty))
+                          _LocalAudioList(
+                            key: ValueKey('aud-off-${off.audios.join("|")}'),
+                            files: off.audios,
+                          )
+                        else if (sciName.isNotEmpty)
                           ReferenceAudios(
-                            key: ValueKey(
-                              'aud-$sciName',
-                            ), // <- fuerza recarga al cambiar
+                            key: ValueKey('aud-$sciName'),
                             scientificName: sciName,
                             limit: 6,
                           )
@@ -222,18 +313,25 @@ class _ResultScreenState extends State<ResultScreen> {
                             style: TextStyle(color: Colors.black54),
                           ),
                         const SizedBox(height: 24),
+
                         // --- Espectrograma ---
                         const _SectionRow(
                           icon: Icons.show_chart,
                           title: 'Espectrograma',
                         ),
                         const SizedBox(height: 10),
-                        SpectrogramCard(
-                          key: ValueKey(
-                            'spec-$sciName',
-                          ), // <- fuerza recarga al cambiar de ave
-                          scientificName: sciName,
-                        ),
+                        if (isOffline && off!.spectrograms.isNotEmpty)
+                          Image.file(
+                            File(off.spectrograms.first),
+                            key: ValueKey('spec-off-${off.spectrograms.first}'),
+                            height: 160,
+                            fit: BoxFit.cover,
+                          )
+                        else
+                          SpectrogramCard(
+                            key: ValueKey('spec-$sciName'),
+                            scientificName: sciName,
+                          ),
                         const SizedBox(height: 24),
 
                         const _SectionRow(
@@ -241,37 +339,40 @@ class _ResultScreenState extends State<ResultScreen> {
                           title: 'Mapa de distribución',
                         ),
                         const SizedBox(height: 10),
-                        FutureBuilder<int?>(
-                          key: ValueKey(
-                            'map-$sciName',
-                          ), // <- nuevo key por especie
-                          future: sciName.isNotEmpty
-                              ? GbifService.fetchSpeciesKey(sciName)
-                              : Future.value(null),
-                          builder: (context, snapGbif) {
-                            if (snapGbif.connectionState ==
-                                ConnectionState.waiting) {
-                              return const Padding(
-                                padding: EdgeInsets.symmetric(vertical: 10),
-                                child: LinearProgressIndicator(color: kBrand),
+                        if (isOffline &&
+                            (off!.distributionGeoJson?.isNotEmpty ?? false))
+                          DistributionMapOffline(
+                            key: ValueKey('map-off-${off.distributionGeoJson}'),
+                            geoJsonPath: off!.distributionGeoJson!,
+                          )
+                        else
+                          FutureBuilder<int?>(
+                            key: ValueKey('map-$sciName'),
+                            future: sciName.isNotEmpty
+                                ? GbifService.fetchSpeciesKey(sciName)
+                                : Future.value(null),
+                            builder: (context, snapGbif) {
+                              if (snapGbif.connectionState ==
+                                  ConnectionState.waiting) {
+                                return const Padding(
+                                  padding: EdgeInsets.symmetric(vertical: 10),
+                                  child: LinearProgressIndicator(color: kBrand),
+                                );
+                              }
+                              final speciesKey = snapGbif.data;
+                              if (speciesKey == null) {
+                                return const Text(
+                                  'No encontramos el taxón en GBIF.',
+                                  style: TextStyle(color: Colors.black54),
+                                );
+                              }
+                              return DistributionMap(
+                                key: ValueKey('dist-$speciesKey'),
+                                taxonKey: speciesKey.toString(),
+                                showPoints: true,
                               );
-                            }
-                            final speciesKey = snapGbif.data;
-                            if (speciesKey == null) {
-                              return const Text(
-                                'No encontramos el taxón en GBIF.',
-                                style: TextStyle(color: Colors.black54),
-                              );
-                            }
-                            return DistributionMap(
-                              key: ValueKey(
-                                'dist-$speciesKey',
-                              ), // <- asegura rebuild
-                              taxonKey: speciesKey.toString(),
-                              showPoints: true,
-                            );
-                          },
-                        ),
+                            },
+                          ),
 
                         const SizedBox(height: 24),
 
@@ -280,18 +381,63 @@ class _ResultScreenState extends State<ResultScreen> {
                           title: 'Galería',
                         ),
                         const SizedBox(height: 10),
-                        SpeciesGalleryGrid(
-                          key: ValueKey(
-                            'gal-$sciName',
-                          ), // <- fuerza recarga de galería
-                          scientificName: sciName,
-                          initialUrls: (data?.gallery ?? [])
-                              .whereType<String>()
-                              .where(_isSupportedImage)
-                              .toList(),
-                          limit: 12,
-                          debug: false,
-                        ),
+
+                        // ======= OFFLINE =======
+                        if (isOffline) ...[
+                          (() {
+                            // Combinar cover + gallery y evitar duplicados
+                            final imgs = <String>[];
+                            if (off!.coverImage != null &&
+                                off.coverImage!.isNotEmpty) {
+                              imgs.add(off.coverImage!);
+                            }
+                            imgs.addAll(off.gallery.where((e) => e.isNotEmpty));
+
+                            // Unicos
+                            final seen = <String>{};
+                            final finalList = <String>[];
+                            for (final p in imgs) {
+                              if (seen.add(p)) finalList.add(p);
+                            }
+
+                            if (finalList.isEmpty) {
+                              return const Text(
+                                'Sin imágenes disponibles.',
+                                style: TextStyle(color: Colors.black54),
+                              );
+                            }
+
+                            return GridView.builder(
+                              key: ValueKey('gal-off-${finalList.join("|")}'),
+                              itemCount: finalList.length,
+                              shrinkWrap: true,
+                              physics: const NeverScrollableScrollPhysics(),
+                              gridDelegate:
+                                  const SliverGridDelegateWithFixedCrossAxisCount(
+                                    crossAxisCount: 2,
+                                    mainAxisSpacing: 12,
+                                    crossAxisSpacing: 12,
+                                  ),
+                              itemBuilder: (_, i) => ClipRRect(
+                                borderRadius: BorderRadius.circular(12),
+                                child: Image(
+                                  image: _imgProvider(finalList[i]),
+                                  fit: BoxFit.cover,
+                                ),
+                              ),
+                            );
+                          })(),
+                        ]
+                        // ======= ONLINE =======
+                        else ...[
+                          SpeciesGalleryGrid(
+                            key: ValueKey('gal-$sciName'),
+                            scientificName: sciName,
+                            initialUrls: galNet,
+                            limit: 12,
+                            debug: false,
+                          ),
+                        ],
 
                         const SizedBox(height: 24),
 
@@ -340,6 +486,7 @@ class _ResultScreenState extends State<ResultScreen> {
 /// ===== Header (gradiente + avatares + pill + indicadores 1..3) =====
 class _Header extends StatelessWidget {
   const _Header({
+    super.key, // ✅ agrega esta línea
     required this.index,
     required this.total,
     required this.onBack,
@@ -369,7 +516,6 @@ class _Header extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      // +alto para que la “píldora” no se monte con el contenido
       height: 408,
       child: Stack(
         clipBehavior: Clip.none,
@@ -404,13 +550,13 @@ class _Header extends StatelessWidget {
             Positioned(
               left: -28,
               top: 70,
-              child: _SideAvatar(imageUrl: sideLeftImage!),
+              child: _SideAvatar(imageSrc: sideLeftImage!),
             ),
           if (sideRightImage != null)
             Positioned(
               right: -28,
               top: 70,
-              child: _SideAvatar(imageUrl: sideRightImage!),
+              child: _SideAvatar(imageSrc: sideRightImage!),
             ),
 
           // avatar principal (círculo real y centrado)
@@ -418,7 +564,7 @@ class _Header extends StatelessWidget {
             top: 36,
             left: 0,
             right: 0,
-            child: Center(child: _MainAvatar(imageUrl: mainImage)),
+            child: Center(child: _MainAvatar(imageSrc: mainImage)),
           ),
 
           // indicadores 1..N (máx 3)
@@ -463,13 +609,15 @@ class _Header extends StatelessWidget {
 }
 
 class _SideAvatar extends StatelessWidget {
-  const _SideAvatar({required this.imageUrl});
-  final String imageUrl;
+  const _SideAvatar({super.key, required this.imageSrc});
+  final String imageSrc;
+
   @override
   Widget build(BuildContext context) {
     return ClipOval(
       child: Image(
-        image: _netOrFallback(imageUrl),
+        key: ValueKey('side-$imageSrc'), // ← NUEVO
+        image: _imgProvider(imageSrc),
         width: 84,
         height: 84,
         fit: BoxFit.cover,
@@ -481,15 +629,17 @@ class _SideAvatar extends StatelessWidget {
 }
 
 class _MainAvatar extends StatelessWidget {
-  const _MainAvatar({this.imageUrl});
-  final String? imageUrl;
+  const _MainAvatar({super.key, this.imageSrc});
+  final String? imageSrc;
+
   @override
   Widget build(BuildContext context) {
     return SizedBox.square(
       dimension: 156,
       child: ClipOval(
         child: Image(
-          image: _netOrFallback(imageUrl),
+          key: ValueKey('main-${imageSrc ?? "none"}'), // ← NUEVO
+          image: _imgProvider(imageSrc),
           fit: BoxFit.cover,
           alignment: Alignment.center,
           filterQuality: FilterQuality.medium,
@@ -691,5 +841,178 @@ extension _SplitFirst on String {
   String? get firstOrNull {
     final p = trim().split(RegExp(r'\s+'));
     return p.isEmpty ? null : p.first;
+  }
+}
+
+/// ================= Audios locales =================
+class _LocalAudioList extends StatefulWidget {
+  const _LocalAudioList({super.key, required this.files}); // <- añade super.key
+  final List<String> files;
+  @override
+  State<_LocalAudioList> createState() => _LocalAudioListState();
+}
+
+class _LocalAudioListState extends State<_LocalAudioList> {
+  final _player = AudioPlayer();
+  String? _current;
+  Duration _pos = Duration.zero;
+  Duration _dur = Duration.zero;
+  PlayerState _state = PlayerState.stopped;
+  @override
+  void didUpdateWidget(covariant _LocalAudioList oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.files.join('|') != widget.files.join('|')) {
+      // Cambió la especie / archivos: resetea el player y estado
+      _player.stop();
+      _current = null;
+      _pos = Duration.zero;
+      _dur = Duration.zero;
+      _state = PlayerState.stopped;
+      setState(() {});
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _player.onPlayerStateChanged.listen((s) {
+      if (!mounted) return;
+      setState(() => _state = s);
+    });
+    _player.onDurationChanged.listen((d) {
+      if (!mounted) return;
+      setState(() => _dur = d);
+    });
+    _player.onPositionChanged.listen((p) {
+      if (!mounted) return;
+      setState(() => _pos = p);
+    });
+  }
+
+  @override
+  void dispose() {
+    _player.dispose();
+    super.dispose();
+  }
+
+  Future<void> _toggle(String path) async {
+    if (_current == path && _state == PlayerState.playing) {
+      await _player.pause();
+      return;
+    }
+    if (_current != path) {
+      _current = path;
+      _pos = Duration.zero;
+      _dur = Duration.zero;
+      await _player.stop();
+      await _player.play(DeviceFileSource(path));
+    } else {
+      await _player.resume();
+    }
+    setState(() {});
+  }
+
+  String _fmt(Duration d) {
+    final mm = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final ss = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+    final hh = d.inHours;
+    return hh > 0 ? '$hh:$mm:$ss' : '$mm:$ss';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.files.isEmpty) {
+      return const Text(
+        'No hay audios de referencia disponibles.',
+        style: TextStyle(color: Colors.black54),
+      );
+    }
+
+    return Column(
+      children: widget.files.map((path) {
+        final selected = _current == path;
+        final playing = selected && _state == PlayerState.playing;
+        final name = path.split('/').last;
+
+        final pos = selected ? _pos : Duration.zero;
+        final dur = selected
+            ? (_dur == Duration.zero ? Duration(seconds: 1) : _dur)
+            : const Duration(seconds: 1);
+        final value =
+            pos.inMilliseconds.clamp(0, dur.inMilliseconds) /
+            dur.inMilliseconds;
+
+        return Card(
+          elevation: 1,
+          margin: const EdgeInsets.symmetric(vertical: 6),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    IconButton.filledTonal(
+                      onPressed: () => _toggle(path),
+                      icon: Icon(
+                        playing
+                            ? Icons.pause_rounded
+                            : Icons.play_arrow_rounded,
+                      ),
+                      style: IconButton.styleFrom(
+                        backgroundColor: Colors.black12,
+                        foregroundColor: Colors.black87,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                  ],
+                ),
+                Slider(
+                  value: value.isNaN ? 0 : value,
+                  onChanged: selected && _dur > Duration.zero
+                      ? (v) async {
+                          final target = Duration(
+                            milliseconds: (v * _dur.inMilliseconds).round(),
+                          );
+                          await _player.seek(target);
+                        }
+                      : null,
+                ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      _fmt(pos),
+                      style: const TextStyle(
+                        color: Colors.black54,
+                        fontSize: 12,
+                      ),
+                    ),
+                    Text(
+                      _fmt(selected ? _dur : Duration.zero),
+                      style: const TextStyle(
+                        color: Colors.black54,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      }).toList(),
+    );
   }
 }

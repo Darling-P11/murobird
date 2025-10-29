@@ -1,7 +1,12 @@
 import 'package:flutter/material.dart';
 
-AppBar birbyBar(String title, {List<Widget>? actions}) {
+AppBar birbyBar(
+  String title, {
+  List<Widget>? actions,
+  bool showBack = false, // <--- NUEVO
+}) {
   return AppBar(
+    leading: showBack ? const BackButton() : null, // <--- NUEVO
     title: Row(
       mainAxisSize: MainAxisSize.min,
       children: [

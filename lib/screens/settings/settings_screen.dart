@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import '../../core/theme.dart';
 import '../../core/routes.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
+import '../../offline/offline_prefs.dart';
+import '../../offline/offline_manager.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -12,12 +15,68 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   // Estados demo (prototipo)
   bool _darkMode = false;
-  bool _saveAuto = true;
+  bool _saveAuto = false; // valor inicial; luego se carga desde prefs
+
   bool _haptics = true;
   bool _uiSounds = false;
   bool _tips = true;
 
+  // Offline
+  bool _offlineEnabled = false;
+  bool _busy = false; // bloquea acciones mientras descarga
+  double _progress = 0.0; // 0..1
+  String _verifyMsg = ''; // resultado de verificación
+
   String _language = 'es';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPrefs();
+  }
+
+  Future<void> _loadPrefs() async {
+    _offlineEnabled = await OfflinePrefs.enabled;
+    _saveAuto = await OfflinePrefs.autoSaveRecordings; // 👈 añadido
+    setState(() {});
+  }
+
+  Future<void> _download() async {
+    setState(() {
+      _busy = true;
+      _progress = 0.0;
+    });
+    try {
+      final conn = await Connectivity().checkConnectivity();
+      if (conn == ConnectivityResult.none) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Sin conexión para descargar')),
+          );
+        }
+        return;
+      }
+      await OfflineManager.downloadAndInstallWithProgress((p) {
+        if (!mounted) return;
+        setState(() => _progress = p.clamp(0.0, 1.0));
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Paquete offline instalado')),
+        );
+      }
+    } catch (e, st) {
+      if (mounted) {
+        // ignore: avoid_print
+        print('DESCARGA OFFLINE ERROR: $e\n$st');
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error al descargar: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -34,6 +93,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
             shape: const RoundedRectangleBorder(
               borderRadius: BorderRadius.vertical(bottom: Radius.circular(28)),
             ),
+
+            // 👇 Forzar botón atrás visible y funcional SIEMPRE
+            automaticallyImplyLeading: false,
+            leadingWidth: 56,
+            leading: IconButton(
+              icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
+              onPressed: () {
+                final nav = Navigator.of(context);
+                if (nav.canPop()) {
+                  nav.pop();
+                } else {
+                  // Si esta pantalla es raíz (no hay stack atrás), vuelve a Home
+                  nav.pushReplacementNamed(Routes.home);
+                  // (o usa go_router: context.go(Routes.homePath); si tienes path)
+                }
+              },
+              tooltip: 'Atrás',
+            ),
+
             title: Row(
               mainAxisSize: MainAxisSize.min,
               children: const [
@@ -68,37 +146,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             color: kBrand,
                           ),
                           title: 'Acerca de MuroBird',
-                          subtitle: 'Versión 1.0.0 (demo)',
+                          subtitle: 'Versión 1.0',
                           onTap: () =>
                               Navigator.pushNamed(context, Routes.about),
-                        ),
-                        const Divider(height: 1),
-                        _RowTile(
-                          leading: const Icon(
-                            Icons.language_rounded,
-                            color: kBrand,
-                          ),
-                          title: 'Idioma',
-                          trailing: DropdownButton<String>(
-                            value: _language,
-                            underline: const SizedBox.shrink(),
-                            items: const [
-                              DropdownMenuItem(
-                                value: 'es',
-                                child: Text('Español'),
-                              ),
-                              DropdownMenuItem(
-                                value: 'en',
-                                child: Text('English'),
-                              ),
-                              DropdownMenuItem(
-                                value: 'pt',
-                                child: Text('Português'),
-                              ),
-                            ],
-                            onChanged: (v) =>
-                                setState(() => _language = v ?? 'es'),
-                          ),
                         ),
                       ],
                     ),
@@ -111,14 +161,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     icon: Icons.tune_rounded,
                     child: Column(
                       children: [
+                        // Switch Modo offline (persistente)
                         _SwitchTile(
                           leading: const Icon(
-                            Icons.dark_mode_rounded,
+                            Icons.cloud_off_rounded,
                             color: kBrand,
                           ),
-                          title: 'Tema oscuro',
-                          value: _darkMode,
-                          onChanged: (v) => setState(() => _darkMode = v),
+                          title: 'Modo offline',
+                          subtitle:
+                              'Usar datos locales y no consultar internet',
+                          value: _offlineEnabled,
+                          onChanged: (v) async {
+                            await OfflinePrefs.setEnabled(v);
+                            setState(() => _offlineEnabled = v);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  v
+                                      ? 'Modo offline ACTIVADO (se priorizan datos locales).'
+                                      : 'Modo offline DESACTIVADO (se usarán servicios online).',
+                                ),
+                              ),
+                            );
+                          },
                         ),
                         const Divider(height: 1),
                         _SwitchTile(
@@ -129,38 +194,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           title: 'Guardar automáticamente las grabaciones',
                           subtitle: 'Se guardan en “Grabaciones” al finalizar',
                           value: _saveAuto,
-                          onChanged: (v) => setState(() => _saveAuto = v),
+                          onChanged: (v) async {
+                            await OfflinePrefs.setAutoSaveRecordings(v);
+                            setState(() => _saveAuto = v);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  v
+                                      ? 'Guardado automático ACTIVADO: las grabaciones se almacenarán localmente.'
+                                      : 'Guardado automático DESACTIVADO.',
+                                ),
+                              ),
+                            );
+                          },
                         ),
+
                         const Divider(height: 1),
-                        _SwitchTile(
-                          leading: const Icon(
-                            Icons.vibration_rounded,
-                            color: kBrand,
-                          ),
-                          title: 'Vibración (haptics)',
-                          value: _haptics,
-                          onChanged: (v) => setState(() => _haptics = v),
-                        ),
-                        const Divider(height: 1),
-                        _SwitchTile(
-                          leading: const Icon(
-                            Icons.volume_up_rounded,
-                            color: kBrand,
-                          ),
-                          title: 'Sonidos de interfaz',
-                          value: _uiSounds,
-                          onChanged: (v) => setState(() => _uiSounds = v),
-                        ),
-                        const Divider(height: 1),
-                        _SwitchTile(
-                          leading: const Icon(
-                            Icons.tips_and_updates_rounded,
-                            color: kBrand,
-                          ),
-                          title: 'Mostrar consejos',
-                          value: _tips,
-                          onChanged: (v) => setState(() => _tips = v),
-                        ),
+                        // Otros switches que ya tenías podrían ir aquí...
                       ],
                     ),
                   ),
@@ -191,16 +241,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           onTap: () =>
                               Navigator.pushNamed(context, Routes.privacy),
                         ),
-                        const Divider(height: 1),
-                        _NavTile(
-                          leading: const Icon(
-                            Icons.help_outline_rounded,
-                            color: kBrand,
-                          ),
-                          title: 'Ayuda',
-                          onTap: () =>
-                              Navigator.pushNamed(context, Routes.help),
-                        ),
                       ],
                     ),
                   ),
@@ -212,44 +252,145 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     icon: Icons.storage_rounded,
                     child: Column(
                       children: [
-                        _DangerTile(
+                        // Descargar/actualizar paquete offline (con barra de progreso)
+                        ListTile(
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 4,
+                            vertical: 2,
+                          ),
                           leading: const Icon(
-                            Icons.delete_sweep_rounded,
-                            color: Colors.red,
+                            Icons.download_rounded,
+                            color: kBrand,
                           ),
-                          title: 'Borrar historial',
-                          onTap: () => _confirm(
-                            context,
-                            title: 'Borrar historial',
-                            message:
-                                'Se eliminarán todas las entradas del historial. Esta acción no se puede deshacer.',
-                            onOk: () => _ok('Historial borrado'),
+                          title: const Text(
+                            'Descargar/actualizar paquete offline',
+                            style: TextStyle(fontWeight: FontWeight.w700),
                           ),
+                          subtitle: const Text(
+                            'Imágenes, audios y mapas de especies',
+                          ),
+                          trailing: _busy
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.chevron_right_rounded),
+                          onTap: _busy ? null : _download,
                         ),
+
+                        // Barra de progreso
+                        if (_busy || _progress > 0)
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 6, 16, 10),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                LinearProgressIndicator(
+                                  value: _busy
+                                      ? (_progress == 0 ? null : _progress)
+                                      : _progress,
+                                  backgroundColor: Colors.black12,
+                                  color: kBrand,
+                                  minHeight: 8,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  _busy
+                                      ? (_progress == 0
+                                            ? 'Preparando descarga...'
+                                            : 'Progreso: ${(_progress * 100).toStringAsFixed(0)}%')
+                                      : 'Último progreso: ${(_progress * 100).toStringAsFixed(0)}%',
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.black54,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+
                         const Divider(height: 1),
+
+                        // Verificar instalación
+                        ListTile(
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 4,
+                            vertical: 2,
+                          ),
+                          leading: const Icon(
+                            Icons.verified_rounded,
+                            color: kBrand,
+                          ),
+                          title: const Text(
+                            'Verificar descarga',
+                            style: TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                          subtitle: Text(
+                            _verifyMsg.isEmpty
+                                ? 'Comprobar si está instalado correctamente'
+                                : _verifyMsg,
+                          ),
+                          trailing: const Icon(Icons.refresh_rounded),
+                          onTap: () async {
+                            final info = await OfflineManager.verifyInstall();
+                            final ready = await OfflineManager.isReady();
+                            final msg = StringBuffer()
+                              ..writeln(
+                                ready
+                                    ? 'Instalación: OK'
+                                    : 'Instalación: NO LISTA',
+                              )
+                              ..writeln('Ruta base: ${info['base_dir'] ?? '-'}')
+                              ..writeln(
+                                'DB: ${info['db_exists'] ? 'sí' : 'no'}',
+                              )
+                              ..writeln('Especies: ${info['count_species']}')
+                              ..writeln(
+                                'Assets muestra: ${info['assets_ok'] ? 'ok' : 'faltan'}',
+                              );
+                            setState(() => _verifyMsg = msg.toString().trim());
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  ready
+                                      ? 'Offline listo'
+                                      : 'Offline incompleto',
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+
+                        const Divider(height: 1),
+
+                        // Eliminar paquete offline
                         _DangerTile(
                           leading: const Icon(
                             Icons.delete_forever_rounded,
                             color: Colors.red,
                           ),
-                          title: 'Borrar grabaciones locales',
+                          title: 'Eliminar paquete offline',
                           onTap: () => _confirm(
                             context,
-                            title: 'Borrar grabaciones',
+                            title: 'Eliminar paquete offline',
                             message:
-                                'Se eliminarán las grabaciones guardadas en el dispositivo (demo).',
-                            onOk: () => _ok('Grabaciones borradas'),
+                                'Se eliminarán los datos descargados (imágenes, audios y mapas). ¿Deseas continuar?',
+                            onOk: () async {
+                              setState(() {
+                                _progress = 0.0;
+                                _verifyMsg = '';
+                              });
+                              await OfflineManager.uninstall();
+                              _ok('Paquete offline eliminado');
+                            },
                           ),
                         ),
+
                         const Divider(height: 1),
-                        _NavTile(
-                          leading: const Icon(
-                            Icons.ios_share_rounded,
-                            color: kBrand,
-                          ),
-                          title: 'Exportar datos (demo)',
-                          onTap: () => _ok('Exportación (demo)'),
-                        ),
                       ],
                     ),
                   ),

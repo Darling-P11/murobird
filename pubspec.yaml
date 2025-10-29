@@ -23,6 +23,12 @@ dependencies:
   flutter_map: ^6.1.0
   latlong2: ^0.9.1
   file_picker: ^8.0.3
+  path: ^1.9.0  
+  shared_preferences: ^2.2.3
+  archive: ^3.6.1
+  connectivity_plus: ^6.0.5
+  share_plus: ^10.0.0
+  lottie: ^3.1.2
 
 dev_dependencies:
   flutter_test:
@@ -52,6 +58,8 @@ flutter:
     # Puedes incluir el directorio de labels completo
     - assets/models/birdnet/labels/
     - assets/mock/
+    - assets/maps/world_countries_110m.geojson
+    - assets/mock/bird.json
     
 
 flutter_launcher_icons:
