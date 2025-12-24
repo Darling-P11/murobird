@@ -94,13 +94,13 @@ class _DistributionMapState extends State<DistributionMap> {
           children: [
             TileLayer(
               urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-              userAgentPackageName: 'com.example.murobird',
+              userAgentPackageName: 'com.orbix.orbird',
               tileProvider: NetworkTileProvider(headers: _headers),
               maxNativeZoom: 19,
             ),
             TileLayer(
               urlTemplate: overlayUrl,
-              userAgentPackageName: 'com.example.murobird',
+              userAgentPackageName: 'com.orbix.orbird',
               tileProvider: NetworkTileProvider(headers: _headers),
               maxNativeZoom: 12,
               tileBuilder: (context, w, __) => Opacity(opacity: 0.85, child: w),

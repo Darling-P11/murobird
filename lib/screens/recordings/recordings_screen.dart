@@ -1,12 +1,15 @@
+// lib/screens/recordings/recordings_screen.dart
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:ui';
+
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
-import '../../core/theme.dart';
 import '../../core/routes.dart';
+import '../../widgets/bottom_nav_scaffold.dart';
 
 class RecordingsScreen extends StatefulWidget {
   const RecordingsScreen({super.key});
@@ -16,11 +19,12 @@ class RecordingsScreen extends StatefulWidget {
 }
 
 class _RecordingsScreenState extends State<RecordingsScreen> {
+  static const Color _brand = Color(0xFF001225);
+
   final TextEditingController _search = TextEditingController();
   final List<_Recording> _all = [];
   final Set<String> _selected = {};
 
-  // Repro
   final AudioPlayer _player = AudioPlayer();
   String? _playingPath;
 
@@ -31,7 +35,7 @@ class _RecordingsScreenState extends State<RecordingsScreen> {
     super.initState();
     _loadRecordings();
     _player.onPlayerComplete.listen((event) {
-      setState(() => _playingPath = null);
+      if (mounted) setState(() => _playingPath = null);
     });
   }
 
@@ -60,6 +64,7 @@ class _RecordingsScreenState extends State<RecordingsScreen> {
 
     final docs = await getApplicationDocumentsDirectory();
     final dir = Directory('${docs.path}/recordings');
+
     if (!await dir.exists()) {
       setState(() {
         _all.clear();
@@ -79,7 +84,7 @@ class _RecordingsScreenState extends State<RecordingsScreen> {
       try {
         final stat = await f.stat();
         final sizeBytes = stat.size;
-        final dur = await _wavDuration(f); // calcula usando cabecera/fómula
+        final dur = await _wavDuration(f);
         items.add(
           _Recording(
             id: f.path,
@@ -91,12 +96,9 @@ class _RecordingsScreenState extends State<RecordingsScreen> {
             ext: '.wav',
           ),
         );
-      } catch (_) {
-        // ignorar archivos problemáticos
-      }
+      } catch (_) {}
     }
 
-    // Orden: más nuevos primero
     items.sort((a, b) => b.dateTime.compareTo(a.dateTime));
 
     setState(() {
@@ -113,13 +115,11 @@ class _RecordingsScreenState extends State<RecordingsScreen> {
   }
 
   Future<Duration> _wavDuration(File f) async {
-    // Cálculo rápido para WAV PCM 16kHz, 16-bit, mono (como graba tu app)
-    // duration = (dataBytes) / (sr * ch * (bits/8))
     const sr = 16000;
     const ch = 1;
     const bits = 16;
     final length = await f.length();
-    final dataBytes = math.max<int>(0, length - 44); // 44 bytes header RIFF
+    final dataBytes = math.max<int>(0, length - 44);
     final secs = dataBytes / (sr * ch * (bits / 8));
     return Duration(milliseconds: (secs * 1000).round());
   }
@@ -140,11 +140,14 @@ class _RecordingsScreenState extends State<RecordingsScreen> {
     try {
       final f = File(r.path);
       if (await f.exists()) await f.delete();
+
       setState(() => _all.removeWhere((e) => e.id == r.id));
+
       if (_playingPath == r.path) {
         await _player.stop();
-        setState(() => _playingPath = null);
+        if (mounted) setState(() => _playingPath = null);
       }
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -190,19 +193,16 @@ class _RecordingsScreenState extends State<RecordingsScreen> {
   }
 
   Future<void> _playOrPause(_Recording r) async {
-    // Si ya está reproduciendo este, pausar
     if (_playingPath == r.path) {
       await _player.stop();
       setState(() => _playingPath = null);
       return;
     }
 
-    // Si estaba otro sonando, deténlo
     if (_playingPath != null) {
       await _player.stop();
     }
 
-    // Reproducir este
     await _player.play(DeviceFileSource(r.path));
     setState(() => _playingPath = r.path);
   }
@@ -226,10 +226,10 @@ class _RecordingsScreenState extends State<RecordingsScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
-              children: const [
-                Icon(Icons.info_outline, color: kBrand),
-                SizedBox(width: 8),
-                Text(
+              children: [
+                Icon(Icons.info_outline, color: _brand),
+                const SizedBox(width: 8),
+                const Text(
                   'Detalles',
                   style: TextStyle(fontWeight: FontWeight.w800, fontSize: 18),
                 ),
@@ -242,14 +242,10 @@ class _RecordingsScreenState extends State<RecordingsScreen> {
             _kv('Tamaño', '${r.sizeMb.toStringAsFixed(2)} MB'),
             _kv('Ruta', r.path),
             const SizedBox(height: 10),
-            Row(
-              children: [
-                OutlinedButton.icon(
-                  onPressed: () => Navigator.pop(context),
-                  icon: const Icon(Icons.close),
-                  label: const Text('Cerrar'),
-                ),
-              ],
+            OutlinedButton.icon(
+              onPressed: () => Navigator.pop(context),
+              icon: const Icon(Icons.close),
+              label: const Text('Cerrar'),
             ),
           ],
         ),
@@ -259,186 +255,439 @@ class _RecordingsScreenState extends State<RecordingsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final top = MediaQuery.of(context).padding.top;
     final items = _filtered;
 
-    return Scaffold(
-      backgroundColor: kBg,
-      body: CustomScrollView(
-        slivers: [
-          // ===== Encabezado con botón atrás =====
-          SliverAppBar(
-            backgroundColor: kBrand,
-            pinned: true,
-            toolbarHeight: selectionMode ? 72 : 96,
-            centerTitle: true,
-            shape: const RoundedRectangleBorder(
-              borderRadius: BorderRadius.vertical(bottom: Radius.circular(28)),
-            ),
-            automaticallyImplyLeading: false,
-            leadingWidth: 56,
-            leading: IconButton(
-              icon: Icon(
-                selectionMode ? Icons.close : Icons.arrow_back_rounded,
-                color: Colors.white,
-              ),
-              onPressed: () {
-                if (selectionMode) {
-                  _clearSelection();
-                } else {
-                  final nav = Navigator.of(context);
-                  if (nav.canPop()) {
-                    nav.pop();
-                  } else {
-                    nav.pushReplacementNamed(Routes.home);
-                  }
-                }
-              },
-              tooltip: selectionMode ? 'Cancelar selección' : 'Atrás',
-            ),
-            title: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  selectionMode
-                      ? Icons.checklist_rounded
-                      : Icons.library_music_rounded,
-                  color: Colors.white,
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  selectionMode
-                      ? '${_selected.length} seleccionada(s)'
-                      : 'Grabaciones',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w900,
-                    fontSize: 24,
-                  ),
-                ),
-              ],
-            ),
-            actions: [
-              if (!selectionMode)
-                IconButton(
-                  onPressed: _loadRecordings,
-                  icon: const Icon(Icons.refresh_rounded, color: Colors.white),
-                  tooltip: 'Actualizar',
-                ),
-              if (selectionMode)
-                IconButton(
-                  onPressed: _deleteSelected,
-                  icon: const Icon(Icons.delete_outline, color: Colors.white),
-                  tooltip: 'Eliminar seleccionadas',
-                ),
-            ],
-          ),
-
-          // ===== Buscador =====
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
-              child: TextField(
-                controller: _search,
-                onChanged: (_) => setState(() {}),
-                decoration: InputDecoration(
-                  hintText: 'Buscar por nombre…',
-                  prefixIcon: const Icon(Icons.search_rounded),
-                  filled: true,
-                  fillColor: Colors.white,
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 10,
-                  ),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(14),
-                    borderSide: BorderSide.none,
-                  ),
-                ),
+    return BottomNavScaffold(
+      child: Stack(
+        children: [
+          // ===== Fondo (igual Home) =====
+          Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [_brand, _brand.withOpacity(.92), Colors.white],
+                stops: const [0, .42, 1],
               ),
             ),
           ),
 
-          // ===== Lista / vacío / cargando =====
-          if (_loading)
-            const SliverToBoxAdapter(
-              child: Padding(
-                padding: EdgeInsets.only(top: 80),
-                child: Center(child: CircularProgressIndicator()),
+          CustomScrollView(
+            physics: const BouncingScrollPhysics(),
+            slivers: [
+              // ===== HERO HEADER =====
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(18, top + 10, 18, 14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Top bar
+                      Row(
+                        children: [
+                          Builder(
+                            builder: (context) => _HeaderIconButton(
+                              icon: selectionMode
+                                  ? Icons.close_rounded
+                                  : Icons.grid_view_rounded,
+                              onTap: () {
+                                if (selectionMode) {
+                                  _clearSelection();
+                                } else {
+                                  Scaffold.of(context).openDrawer();
+                                }
+                              },
+                            ),
+                          ),
+                          const Spacer(),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+
+                      // Título centrado
+                      SizedBox(
+                        width: double.infinity,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            Text(
+                              selectionMode
+                                  ? '${_selected.length} seleccionada(s)'
+                                  : 'Grabaciones',
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 28,
+                                fontWeight: FontWeight.w900,
+                                height: 1.05,
+                                letterSpacing: .2,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              selectionMode
+                                  ? 'Acciones masivas disponibles abajo.'
+                                  : 'Reproduce, comparte o vuelve a analizar tus audios.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: Colors.white.withOpacity(.82),
+                                fontSize: 14.5,
+                                fontWeight: FontWeight.w600,
+                                height: 1.35,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+
+                      const SizedBox(height: 14),
+
+                      // Chips de acción
+                      SizedBox(
+                        width: double.infinity,
+                        child: Wrap(
+                          alignment: WrapAlignment.center,
+                          spacing: 10,
+                          runSpacing: 10,
+                          children: [
+                            _StatusChip(
+                              icon: Icons.library_music_rounded,
+                              label: '${_all.length} audios',
+                            ),
+                            if (!selectionMode)
+                              _StatusChip(
+                                icon: Icons.refresh_rounded,
+                                label: 'Actualizar',
+                                onTap: _loadRecordings,
+                              ),
+                            if (selectionMode)
+                              _StatusChip(
+                                icon: Icons.delete_outline_rounded,
+                                label: 'Eliminar',
+                                danger: true,
+                                onTap: _deleteSelected,
+                              ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
-            )
-          else if (items.isEmpty)
-            SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.only(top: 60),
-                child: Column(
-                  children: const [
-                    Icon(
-                      Icons.library_music_outlined,
-                      size: 64,
-                      color: Colors.black26,
-                    ),
-                    SizedBox(height: 10),
-                    Text(
-                      'Sin grabaciones',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
+
+              // ===== BUSCADOR (glass) =====
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 6, 16, 10),
+                  child: _GlassCard(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                      child: TextField(
+                        controller: _search,
+                        onChanged: (_) => setState(() {}),
+                        style: const TextStyle(color: Colors.white),
+                        decoration: InputDecoration(
+                          hintText: 'Buscar por nombre…',
+                          hintStyle: TextStyle(
+                            color: Colors.white.withOpacity(.65),
+                          ),
+                          prefixIcon: Icon(
+                            Icons.search_rounded,
+                            color: Colors.white.withOpacity(.9),
+                          ),
+                          border: InputBorder.none,
+                        ),
                       ),
                     ),
-                    SizedBox(height: 6),
-                    Text(
-                      'Graba en “Tiempo real” con el auto-guardado activo o vuelve luego.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: Colors.black54),
-                    ),
-                  ],
+                  ),
                 ),
               ),
-            )
-          else
-            SliverList.builder(
-              itemCount: items.length,
-              itemBuilder: (context, i) {
-                final r = items[i];
-                final selected = _selected.contains(r.id);
-                final isPlaying = _playingPath == r.path;
-                return Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-                  child: _RecordingTile(
-                    recording: r,
-                    selected: selected,
-                    isPlaying: isPlaying,
-                    onTap: () {
-                      if (selectionMode) {
-                        _toggleSelect(r.id);
-                      } else {
-                        _playOrPause(r);
-                      }
-                    },
-                    onLongPress: () => _toggleSelect(r.id),
-                    onMore: () => _showDetails(r),
-                    onDelete: () => _deleteOne(r),
-                    onShare: () => _shareOne(r),
-                    onReanalyze: () => _reanalyze(r),
-                  ),
-                );
-              },
-            ),
 
-          const SliverToBoxAdapter(child: SizedBox(height: 20)),
+              // ===== CONTENIDO =====
+              if (_loading)
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: 40),
+                    child: Center(
+                      child: _GlassCard(
+                        child: SizedBox(
+                          height: 110,
+                          child: Row(
+                            children: [
+                              const SizedBox(width: 18),
+                              const SizedBox(
+                                width: 28,
+                                height: 28,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2.8,
+                                ),
+                              ),
+                              const SizedBox(width: 14),
+                              Expanded(
+                                child: Text(
+                                  'Cargando grabaciones…',
+                                  style: TextStyle(
+                                    color: Colors.white.withOpacity(.92),
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                )
+              else if (items.isEmpty)
+                const SliverToBoxAdapter(
+                  child: Padding(
+                    padding: EdgeInsets.only(top: 44),
+                    child: _EmptyRecordingsModern(),
+                  ),
+                )
+              else
+                SliverList.builder(
+                  itemCount: items.length,
+                  itemBuilder: (context, i) {
+                    final r = items[i];
+                    final selected = _selected.contains(r.id);
+                    final isPlaying = _playingPath == r.path;
+
+                    return Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                      child: _RecordingTileModern(
+                        brand: _brand,
+                        recording: r,
+                        selected: selected,
+                        isPlaying: isPlaying,
+                        selectionMode: selectionMode,
+                        onTap: () {
+                          if (selectionMode) {
+                            _toggleSelect(r.id);
+                          } else {
+                            _playOrPause(r);
+                          }
+                        },
+                        onLongPress: () => _toggleSelect(r.id),
+                        onMore: () => _showDetails(r),
+                        onDelete: () => _deleteOne(r),
+                        onShare: () => _shareOne(r),
+                        onReanalyze: () => _reanalyze(r),
+                      ),
+                    );
+                  },
+                ),
+
+              // ===== Footer Orbix =====
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+                  child: Center(
+                    child: Opacity(
+                      opacity: 0.55,
+                      child: Column(
+                        children: [
+                          Image.asset(
+                            'assets/images/logo_orbix.png',
+                            width: 64,
+                            height: 64,
+                            fit: BoxFit.contain,
+                            errorBuilder: (_, __, ___) =>
+                                const SizedBox.shrink(),
+                          ),
+                          const SizedBox(height: 6),
+                          const Text(
+                            'Desarrollado por Orbix',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w800,
+                              color: Colors.black54,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+
+              const SliverFillRemaining(
+                hasScrollBody: false,
+                child: SizedBox(),
+              ),
+            ],
+          ),
         ],
       ),
     );
   }
 }
 
-/* ============================ Widgets ============================= */
+/* ============================ UI helpers ============================= */
 
-class _RecordingTile extends StatelessWidget {
-  const _RecordingTile({
+class _HeaderIconButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onTap;
+  const _HeaderIconButton({required this.icon, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.white.withOpacity(.10),
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Container(
+          width: 44,
+          height: 44,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: Colors.white.withOpacity(.18), width: 1),
+          ),
+          child: Icon(icon, color: Colors.white, size: 22),
+        ),
+      ),
+    );
+  }
+}
+
+class _LogoPill extends StatelessWidget {
+  final String logoPath;
+  final String title;
+  const _LogoPill({required this.logoPath, required this.title});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(.10),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white.withOpacity(.18), width: 1),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Image.asset(
+            logoPath,
+            width: 26,
+            height: 26,
+            fit: BoxFit.contain,
+            errorBuilder: (_, __, ___) =>
+                const Icon(Icons.podcasts_rounded, color: Colors.white),
+          ),
+          const SizedBox(width: 10),
+          Text(
+            title,
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w900,
+              fontSize: 16,
+              letterSpacing: .2,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _GlassCard extends StatelessWidget {
+  final Widget child;
+  const _GlassCard({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(18),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(.10),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: Colors.white.withOpacity(.16), width: 1),
+          ),
+          child: child,
+        ),
+      ),
+    );
+  }
+}
+
+class _StatusChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback? onTap;
+  final bool danger;
+
+  const _StatusChip({
+    required this.icon,
+    required this.label,
+    this.onTap,
+    this.danger = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = danger
+        ? const Color(0xFFB00020).withOpacity(.18)
+        : Colors.white.withOpacity(.12);
+    final br = danger
+        ? const Color(0xFFFF6B6B).withOpacity(.45)
+        : Colors.white.withOpacity(.20);
+
+    final chip = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: br, width: 1),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: Colors.white.withOpacity(.92)),
+          const SizedBox(width: 8),
+          Text(
+            label,
+            style: TextStyle(
+              color: Colors.white.withOpacity(.92),
+              fontWeight: FontWeight.w900,
+              fontSize: 12.5,
+              letterSpacing: .2,
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (onTap == null) return chip;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: onTap,
+        child: chip,
+      ),
+    );
+  }
+}
+
+/* ============================ Tiles modern ============================= */
+
+class _RecordingTileModern extends StatelessWidget {
+  const _RecordingTileModern({
+    required this.brand,
     required this.recording,
     required this.selected,
     required this.isPlaying,
+    required this.selectionMode,
     required this.onTap,
     required this.onLongPress,
     required this.onMore,
@@ -447,9 +696,11 @@ class _RecordingTile extends StatelessWidget {
     required this.onReanalyze,
   });
 
+  final Color brand;
   final _Recording recording;
   final bool selected;
   final bool isPlaying;
+  final bool selectionMode;
   final VoidCallback onTap;
   final VoidCallback onLongPress;
   final VoidCallback onMore;
@@ -459,110 +710,189 @@ class _RecordingTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final iconSize = 20.0;
-    final constraints = const BoxConstraints.tightFor(width: 34, height: 34);
-
     return Material(
       color: Colors.white,
-      elevation: 2,
-      borderRadius: BorderRadius.circular(14),
-      child: InkWell(
-        onTap: onTap,
-        onLongPress: onLongPress,
-        borderRadius: BorderRadius.circular(14),
-        child: Container(
-          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-          child: Row(
-            children: [
-              // Avatar / check de selección / play
-              Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  color: selected ? kBrand : const Color(0xFFEFF6F4),
-                  shape: BoxShape.circle,
+      elevation: 0,
+      borderRadius: BorderRadius.circular(18),
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: Colors.black.withOpacity(.06), width: 1),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(.06),
+              blurRadius: 14,
+              offset: const Offset(0, 8),
+            ),
+          ],
+        ),
+        child: InkWell(
+          onTap: onTap,
+          onLongPress: onLongPress,
+          borderRadius: BorderRadius.circular(18),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+            child: Row(
+              children: [
+                // Avatar (play / check)
+                Container(
+                  width: 48,
+                  height: 48,
+                  decoration: BoxDecoration(
+                    color: selected ? brand : brand.withOpacity(.08),
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: selected
+                          ? Colors.transparent
+                          : brand.withOpacity(.14),
+                      width: 1,
+                    ),
+                  ),
+                  child: Icon(
+                    selected
+                        ? Icons.check_rounded
+                        : (isPlaying
+                              ? Icons.pause_circle_filled_rounded
+                              : Icons.play_circle_fill_rounded),
+                    color: selected ? Colors.white : brand,
+                    size: 30,
+                  ),
                 ),
-                child: Icon(
-                  selected
-                      ? Icons.check
-                      : (isPlaying
-                            ? Icons.pause_circle_filled_rounded
-                            : Icons.play_circle_fill_rounded),
-                  color: selected ? Colors.white : kBrand,
-                ),
-              ),
-              const SizedBox(width: 12),
+                const SizedBox(width: 12),
 
-              // Título + subtítulo
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      recording.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w800,
-                        fontSize: 16,
+                // Texto
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        recording.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w900,
+                          fontSize: 16,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      '${recording.dateTime.formatNice()}  •  ${recording.duration.formatNice()}  •  ${recording.sizeMb.toStringAsFixed(2)} MB',
-                      style: const TextStyle(color: Colors.black54),
-                    ),
-                  ],
+                      const SizedBox(height: 4),
+                      Text(
+                        '${recording.dateTime.formatNice()}  •  ${recording.duration.formatNice()}  •  ${recording.sizeMb.toStringAsFixed(2)} MB',
+                        style: TextStyle(
+                          color: Colors.black.withOpacity(.55),
+                          fontWeight: FontWeight.w600,
+                          fontSize: 12.5,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
 
-              // Acciones
-              FittedBox(
-                fit: BoxFit.scaleDown,
-                child: Row(
-                  children: [
-                    IconButton(
-                      padding: EdgeInsets.zero,
-                      constraints: constraints,
-                      iconSize: iconSize,
-                      tooltip: 'Más',
-                      onPressed: onMore,
-                      icon: const Icon(Icons.more_horiz, color: kBrand),
-                    ),
-                    const SizedBox(width: 4),
-                    IconButton(
-                      padding: EdgeInsets.zero,
-                      constraints: constraints,
-                      iconSize: iconSize,
-                      tooltip: 'Compartir',
-                      onPressed: onShare,
-                      icon: const Icon(Icons.ios_share_rounded, color: kBrand),
-                    ),
-                    const SizedBox(width: 4),
-                    IconButton(
-                      padding: EdgeInsets.zero,
-                      constraints: constraints,
-                      iconSize: iconSize,
-                      tooltip: 'Volver a analizar',
-                      onPressed: onReanalyze,
-                      icon: const Icon(
-                        Icons.manage_search_rounded,
-                        color: kBrand,
+                const SizedBox(width: 8),
+
+                // Acciones (ocúltalas en selección para limpiar UI)
+                if (!selectionMode)
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _MiniIconButton(
+                        icon: Icons.more_horiz,
+                        color: brand,
+                        onTap: onMore,
                       ),
-                    ),
-                    const SizedBox(width: 4),
-                    IconButton(
-                      padding: EdgeInsets.zero,
-                      constraints: constraints,
-                      iconSize: iconSize,
-                      tooltip: 'Eliminar',
-                      onPressed: onDelete,
-                      icon: const Icon(Icons.delete_outline, color: kBrand),
-                    ),
-                  ],
+                      _MiniIconButton(
+                        icon: Icons.ios_share_rounded,
+                        color: brand,
+                        onTap: onShare,
+                      ),
+                      _MiniIconButton(
+                        icon: Icons.manage_search_rounded,
+                        color: brand,
+                        onTap: onReanalyze,
+                      ),
+                      _MiniIconButton(
+                        icon: Icons.delete_outline,
+                        color: brand,
+                        onTap: onDelete,
+                      ),
+                    ],
+                  )
+                else
+                  Icon(
+                    Icons.chevron_right_rounded,
+                    color: Colors.black.withOpacity(.25),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MiniIconButton extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _MiniIconButton({
+    required this.icon,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      onPressed: onTap,
+      icon: Icon(icon, color: color),
+      iconSize: 22,
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints.tightFor(width: 36, height: 36),
+      tooltip: '',
+    );
+  }
+}
+
+class _EmptyRecordingsModern extends StatelessWidget {
+  const _EmptyRecordingsModern();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 18),
+      child: _GlassCard(
+        child: SizedBox(
+          height: 170,
+          child: Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.library_music_outlined,
+                  size: 58,
+                  color: Colors.white.withOpacity(.85),
                 ),
-              ),
-            ],
+                const SizedBox(height: 10),
+                Text(
+                  'Sin grabaciones',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                    color: Colors.white.withOpacity(.95),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Graba en “Tiempo real” con el auto-guardado activo o vuelve luego.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(.80),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -614,31 +944,29 @@ extension _FmtDur on Duration {
   }
 }
 
-Widget _kv(String key, String value) {
-  return Padding(
-    padding: const EdgeInsets.only(bottom: 8),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SizedBox(
-          width: 110,
-          child: Text(
-            key,
-            style: const TextStyle(
-              fontWeight: FontWeight.w700,
-              color: Colors.black87,
-            ),
+Widget _kv(String key, String value) => Padding(
+  padding: const EdgeInsets.only(bottom: 8),
+  child: Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      SizedBox(
+        width: 110,
+        child: Text(
+          key,
+          style: const TextStyle(
+            fontWeight: FontWeight.w700,
+            color: Colors.black87,
           ),
         ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Text(
-            value,
-            softWrap: true,
-            style: const TextStyle(color: Colors.black87),
-          ),
+      ),
+      const SizedBox(width: 8),
+      Expanded(
+        child: Text(
+          value,
+          softWrap: true,
+          style: const TextStyle(color: Colors.black87),
         ),
-      ],
-    ),
-  );
-}
+      ),
+    ],
+  ),
+);

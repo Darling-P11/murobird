@@ -1,9 +1,13 @@
+import 'dart:async';
 import 'dart:io';
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
+import 'package:uuid/uuid.dart';
+
 import '../../core/routes.dart';
 import '../../core/theme.dart';
 import '../../ml/birdnet_service.dart';
-import 'package:uuid/uuid.dart';
 import '../history/history_store.dart';
 
 /// Partes de un label del modelo (nombre común, científico e id normalizado)
@@ -26,12 +30,55 @@ class SearchingScreen extends StatefulWidget {
   State<SearchingScreen> createState() => _SearchingScreenState();
 }
 
-class _SearchingScreenState extends State<SearchingScreen> {
+class _SearchingScreenState extends State<SearchingScreen>
+    with TickerProviderStateMixin {
+  // ===== UI brand =====
+  static const Color _brand = Color(0xFF001225);
+
   String _status = 'Cargando modelo…';
   double _progress = 0.1;
 
   String? _audioPath;
-  bool _started = false; // evita correr _run() más de una vez
+  bool _started = false;
+
+  // Animaciones
+  late final AnimationController _pulseCtrl;
+  late final Animation<double> _pulse;
+  Timer? _tipTimer;
+  int _tipIndex = 0;
+
+  final List<String> _tips = const [
+    'Esto puede tardar unos segundos…',
+    'Si hay ruido de fondo, intenta acercarte más al sonido.',
+    'Estamos comparando con el modelo de reconocimiento.',
+    'Tip: grabaciones de 7–12s suelen dar mejores resultados.',
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _pulseCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    )..repeat(reverse: true);
+
+    _pulse = Tween<double>(
+      begin: 0.98,
+      end: 1.03,
+    ).animate(CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut));
+
+    _tipTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+      if (!mounted) return;
+      setState(() => _tipIndex = (_tipIndex + 1) % _tips.length);
+    });
+  }
+
+  @override
+  void dispose() {
+    _pulseCtrl.dispose();
+    _tipTimer?.cancel();
+    super.dispose();
+  }
 
   @override
   void didChangeDependencies() {
@@ -91,7 +138,7 @@ class _SearchingScreenState extends State<SearchingScreen> {
       }
     }
 
-    // 3) Fallback: si no hay nada claro, usa la misma cadena como común y latín
+    // 3) Fallback
     final sci = l;
     final speciesId = sci
         .toLowerCase()
@@ -100,10 +147,20 @@ class _SearchingScreenState extends State<SearchingScreen> {
     return _LabelParts(common: l, sci: sci, speciesId: speciesId);
   }
 
+  void _cancelAndGoHome() {
+    if (!mounted) return;
+    Navigator.pushNamedAndRemoveUntil(context, Routes.home, (_) => false);
+  }
+
   Future<void> _run() async {
     final audioPath = _audioPath;
+
     try {
-      setState(() => _status = 'Inicializando…');
+      setState(() {
+        _status = 'Inicializando…';
+        _progress = 0.15;
+      });
+
       await BirdnetService.I.load();
 
       setState(() {
@@ -119,7 +176,7 @@ class _SearchingScreenState extends State<SearchingScreen> {
         audioPath,
         segmentSeconds: 3,
         hopSeconds: 1,
-        scoreThreshold: 0.20, // más permisivo para ver resultados
+        scoreThreshold: 0.20,
         topK: 5,
       );
 
@@ -128,7 +185,7 @@ class _SearchingScreenState extends State<SearchingScreen> {
         _progress = 0.9;
       });
 
-      // Determinar el origen (realtime vs uploaded) según argumentos
+      // Determinar el origen (realtime vs uploaded)
       HistorySource src = HistorySource.realtime;
       final rawArgs = ModalRoute.of(context)?.settings.arguments;
       if (rawArgs is Map && rawArgs['source'] == 'uploaded') {
@@ -138,17 +195,17 @@ class _SearchingScreenState extends State<SearchingScreen> {
       // Guardar en historial si hubo predicciones
       if (preds.isNotEmpty) {
         final top = preds.first;
-        final parts = _splitLabel(top.label); // común, científico, speciesId
+        final parts = _splitLabel(top.label);
+
         final entry = HistoryEntry(
           id: const Uuid().v4(),
-          speciesId: parts.speciesId, // ej: "buteo_nitidus"
-          bird: parts.common, // ej: "Gavilán gris lineado"
-          sci: parts.sci, // ej: "Buteo nitidus"
-          confidence: top.score, // 0..1
-          source: src, // realtime o uploaded
+          speciesId: parts.speciesId,
+          bird: parts.common,
+          sci: parts.sci,
+          confidence: top.score,
+          source: src,
           dateTime: DateTime.now(),
-          audioPath: audioPath, // para reproducir/reanalizar luego
-          // thumb: si tienes portada local/asset, puedes setearla aquí
+          audioPath: audioPath,
         );
         await HistoryStore.add(entry);
       }
@@ -173,7 +230,6 @@ class _SearchingScreenState extends State<SearchingScreen> {
         },
       );
     } catch (e, st) {
-      // Logs útiles en consola
       // ignore: avoid_print
       print('Searching ERROR: $e\n$st');
 
@@ -193,39 +249,303 @@ class _SearchingScreenState extends State<SearchingScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final percent = (_progress.clamp(0.0, 1.0) * 100).round();
+
     return Scaffold(
-      backgroundColor: Colors.white,
-      body: SafeArea(
-        child: Center(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 28),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Text(
-                  'Buscando aves…',
-                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900),
-                ),
-                const SizedBox(height: 20),
-                SizedBox(
-                  width: 72,
-                  height: 72,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 6,
-                    value: _progress < 0.98 ? _progress : null,
-                    color: kBrand,
-                    backgroundColor: Colors.black12,
-                  ),
-                ),
-                const SizedBox(height: 20),
-                Text(
-                  _status,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 16, color: Colors.black54),
-                ),
-              ],
+      body: Stack(
+        children: [
+          // Fondo (igual a tu estilo principal)
+          Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [_brand, _brand.withOpacity(.92), Colors.white],
+                stops: const [0, .52, 1],
+              ),
             ),
           ),
+
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+              child: Column(
+                children: [
+                  // Header con "pill"
+                  const SizedBox(height: 18),
+
+                  // Contenido principal centrado
+                  Expanded(
+                    child: Center(
+                      child: _GlassCard(
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(18, 18, 18, 18),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Text(
+                                'Buscando aves…',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.w900,
+                                  height: 1.05,
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              Text(
+                                'No cierres la app mientras analizamos el audio.',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: Colors.white.withOpacity(.80),
+                                  fontSize: 13.5,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              const SizedBox(height: 18),
+
+                              // Progreso circular + % en el centro
+                              ScaleTransition(
+                                scale: _pulse,
+                                child: SizedBox(
+                                  width: 88,
+                                  height: 88,
+                                  child: Stack(
+                                    alignment: Alignment.center,
+                                    children: [
+                                      CircularProgressIndicator(
+                                        strokeWidth: 7,
+                                        value: _progress < 0.98
+                                            ? _progress
+                                            : null,
+                                        color: Colors.white,
+                                        backgroundColor: Colors.white
+                                            .withOpacity(.18),
+                                      ),
+                                      Text(
+                                        '$percent%',
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.w900,
+                                          fontSize: 16,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+
+                              const SizedBox(height: 16),
+
+                              // Estado actual
+                              Text(
+                                _status,
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: Colors.white.withOpacity(.90),
+                                  fontSize: 15.5,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+
+                              // Tip rotativo (suave)
+                              AnimatedSwitcher(
+                                duration: const Duration(milliseconds: 250),
+                                child: Text(
+                                  _tips[_tipIndex],
+                                  key: ValueKey(_tipIndex),
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    color: Colors.white.withOpacity(.72),
+                                    fontSize: 12.5,
+                                    fontWeight: FontWeight.w600,
+                                    height: 1.25,
+                                  ),
+                                ),
+                              ),
+
+                              const SizedBox(height: 16),
+
+                              // Barra lineal elegante
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(999),
+                                child: LinearProgressIndicator(
+                                  value: _progress < 0.98 ? _progress : null,
+                                  minHeight: 10,
+                                  backgroundColor: Colors.white.withOpacity(
+                                    .14,
+                                  ),
+                                  valueColor:
+                                      const AlwaysStoppedAnimation<Color>(
+                                        Colors.white,
+                                      ),
+                                ),
+                              ),
+
+                              const SizedBox(height: 16),
+
+                              // Botón cancelar
+                              SizedBox(
+                                width: double.infinity,
+                                child: TextButton(
+                                  onPressed: _cancelAndGoHome,
+                                  style: TextButton.styleFrom(
+                                    foregroundColor: Colors.white,
+                                    backgroundColor: Colors.white.withOpacity(
+                                      .10,
+                                    ),
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 14,
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(14),
+                                      side: BorderSide(
+                                        color: Colors.white.withOpacity(.18),
+                                      ),
+                                    ),
+                                  ),
+                                  child: const Text(
+                                    'Cancelar',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w900,
+                                      fontSize: 15,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 12),
+
+                  // Footer Orbix
+                  Opacity(
+                    opacity: 0.60,
+                    child: Column(
+                      children: [
+                        Image.asset(
+                          'assets/images/logo_orbix.png',
+                          width: 54,
+                          height: 54,
+                          fit: BoxFit.contain,
+                          errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                        ),
+                        const SizedBox(height: 6),
+                        const Text(
+                          'Desarrollado por Orbix',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w800,
+                            color: Colors.black54,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/* ================== UI pieces (mismo estilo del realtime) ================== */
+
+class _HeaderIconButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onTap;
+  const _HeaderIconButton({required this.icon, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.white.withOpacity(.10),
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Container(
+          width: 44,
+          height: 44,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: Colors.white.withOpacity(.18), width: 1),
+          ),
+          child: Icon(icon, color: Colors.white, size: 22),
+        ),
+      ),
+    );
+  }
+}
+
+class _LogoPill extends StatelessWidget {
+  final String logoPath;
+  final String title;
+  const _LogoPill({required this.logoPath, required this.title});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(.10),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white.withOpacity(.18), width: 1),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Image.asset(
+            logoPath,
+            width: 26,
+            height: 26,
+            fit: BoxFit.contain,
+            errorBuilder: (_, __, ___) =>
+                const Icon(Icons.podcasts_rounded, color: Colors.white),
+          ),
+          const SizedBox(width: 10),
+          Text(
+            title,
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w900,
+              fontSize: 16,
+              letterSpacing: .2,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _GlassCard extends StatelessWidget {
+  final Widget child;
+  const _GlassCard({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(18),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(.10),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: Colors.white.withOpacity(.16), width: 1),
+          ),
+          child: child,
         ),
       ),
     );
