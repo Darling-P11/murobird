@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
 import 'core/theme.dart';
 import 'core/routes.dart';
 
@@ -20,6 +22,12 @@ import 'screens/settings/app_permissions_screen.dart';
 class BirbyApp extends StatelessWidget {
   const BirbyApp({super.key});
 
+  static const _overlay = SystemUiOverlayStyle(
+    statusBarColor: Colors.transparent,
+    statusBarIconBrightness: Brightness.light, // Android: iconos blancos
+    statusBarBrightness: Brightness.dark, // iOS: texto blanco
+  );
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -27,6 +35,15 @@ class BirbyApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: buildBirbyTheme(),
       initialRoute: Routes.splash,
+
+      // ✅ CLAVE: fuerza status bar blanca en todas las pantallas
+      builder: (context, child) {
+        return AnnotatedRegion<SystemUiOverlayStyle>(
+          value: _overlay,
+          child: child ?? const SizedBox.shrink(),
+        );
+      },
+
       routes: {
         Routes.splash: (_) => SplashScreen(),
         Routes.permissions: (_) => PermissionScreen(),
@@ -42,7 +59,6 @@ class BirbyApp extends StatelessWidget {
         Routes.about: (_) => AboutScreen(),
         Routes.privacy: (_) => PrivacyScreen(),
         Routes.appPermissions: (_) => AppPermissionsScreen(),
-        
       },
     );
   }

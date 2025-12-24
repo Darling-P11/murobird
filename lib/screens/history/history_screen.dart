@@ -1,9 +1,12 @@
+// lib/screens/history/history_screen.dart
 import 'dart:convert';
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
-import '../../core/theme.dart';
-import 'history_store.dart'; // ← usamos el store real
+import '../../core/routes.dart';
+import '../../widgets/bottom_nav_scaffold.dart';
+import 'history_store.dart';
 
 class HistoryScreen extends StatefulWidget {
   const HistoryScreen({super.key});
@@ -13,11 +16,11 @@ class HistoryScreen extends StatefulWidget {
 
 class _HistoryScreenState extends State<HistoryScreen>
     with WidgetsBindingObserver {
-  // colección agregada
+  static const Color _brand = Color(0xFF001225);
+
   List<CollectionItem> _items = [];
   bool _loading = true;
 
-  /// mini caché de imágenes
   final Map<String, String?> _thumbCache = {};
 
   @override
@@ -35,7 +38,7 @@ class _HistoryScreenState extends State<HistoryScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _load(); // recarga al volver
+    if (state == AppLifecycleState.resumed) _load();
   }
 
   Future<void> _load() async {
@@ -47,7 +50,6 @@ class _HistoryScreenState extends State<HistoryScreen>
     });
   }
 
-  // === Miniaturas: intenta es→en, originalimage antes que thumbnail y filtra SVG/data ===
   Future<String?> _fetchThumb(String title) async {
     if (_thumbCache.containsKey(title)) return _thumbCache[title];
 
@@ -72,9 +74,8 @@ class _HistoryScreenState extends State<HistoryScreen>
       return best;
     }
 
-    // Probar primero en español (suele traer mejor portada), luego en inglés
     final q = title.trim();
-    String? img = await tryLang('es', q) ?? await tryLang('en', q);
+    final img = await tryLang('es', q) ?? await tryLang('en', q);
 
     _thumbCache[title] = img;
     return img;
@@ -90,93 +91,223 @@ class _HistoryScreenState extends State<HistoryScreen>
     if (nav.canPop()) {
       nav.pop();
     } else {
-      nav.pushReplacementNamed('/'); // ajusta a tu home
+      nav.pushReplacementNamed(Routes.home);
     }
     return false;
   }
 
   @override
   Widget build(BuildContext context) {
+    final top = MediaQuery.of(context).padding.top;
+
     return WillPopScope(
       onWillPop: () => _handleBack(context),
-      child: Scaffold(
-        backgroundColor: kBg,
-        body: CustomScrollView(
-          slivers: [
-            SliverAppBar(
-              backgroundColor: kBrand,
-              pinned: true,
-              toolbarHeight: 96,
-              centerTitle: true,
-              shape: const RoundedRectangleBorder(
-                borderRadius: BorderRadius.vertical(
-                  bottom: Radius.circular(28),
+      child: BottomNavScaffold(
+        child: Stack(
+          children: [
+            // ===== Fondo (igual Home) =====
+            Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [_brand, _brand.withOpacity(.92), Colors.white],
+                  stops: const [0, .42, 1],
                 ),
               ),
-              automaticallyImplyLeading: false,
-              leadingWidth: 56,
-              leading: IconButton(
-                icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
-                onPressed: () => _handleBack(context),
-                tooltip: 'Atrás',
-              ),
-              title: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: const [
-                  Icon(Icons.menu_book_rounded, color: Colors.white),
-                  SizedBox(width: 8),
-                  Text(
-                    'Mi colección',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w900,
-                      fontSize: 24,
+            ),
+
+            CustomScrollView(
+              physics: const BouncingScrollPhysics(),
+              slivers: [
+                // ===== HERO HEADER =====
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(18, top + 10, 18, 14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Top bar
+                        Row(
+                          children: [
+                            Builder(
+                              builder: (context) => _HeaderIconButton(
+                                icon: Icons.grid_view_rounded,
+                                onTap: () => Scaffold.of(context).openDrawer(),
+                              ),
+                            ),
+                            const Spacer(),
+                          ],
+                        ),
+                        const SizedBox(height: 16),
+
+                        // Título + subtítulo centrados
+                        const SizedBox(
+                          width: double.infinity,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              Text(
+                                'Mi colección',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 28,
+                                  fontWeight: FontWeight.w900,
+                                  height: 1.05,
+                                  letterSpacing: .2,
+                                ),
+                              ),
+                              SizedBox(height: 8),
+                              Text(
+                                'Aquí verás las aves que has guardado con su información e imagen.',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: Color.fromRGBO(255, 255, 255, .82),
+                                  fontSize: 14.5,
+                                  fontWeight: FontWeight.w600,
+                                  height: 1.35,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+
+                        const SizedBox(height: 14),
+
+                        // Chips + Refresh
+                        SizedBox(
+                          width: double.infinity,
+                          child: Wrap(
+                            alignment: WrapAlignment.center,
+                            spacing: 10,
+                            runSpacing: 10,
+                            children: [
+                              const _StatusChip(
+                                icon: Icons.collections_bookmark_rounded,
+                                label: 'Guardadas',
+                              ),
+                              _StatusChip(
+                                icon: Icons.layers_rounded,
+                                label: '${_items.length} aves',
+                              ),
+                              _StatusChip(
+                                icon: Icons.refresh_rounded,
+                                label: 'Actualizar',
+                                onTap: _load,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                ],
-              ),
-              actions: [
-                IconButton(
-                  onPressed: _load,
-                  icon: const Icon(Icons.refresh_rounded, color: Colors.white),
-                  tooltip: 'Actualizar',
+                ),
+
+                // ===== CONTENIDO =====
+                if (_loading)
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 50),
+                      child: Center(
+                        child: _GlassCard(
+                          child: SizedBox(
+                            height: 110,
+                            child: Row(
+                              children: [
+                                const SizedBox(width: 18),
+                                const SizedBox(
+                                  width: 28,
+                                  height: 28,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2.8,
+                                  ),
+                                ),
+                                const SizedBox(width: 14),
+                                Expanded(
+                                  child: Text(
+                                    'Cargando colección…',
+                                    style: TextStyle(
+                                      color: Colors.white.withOpacity(.92),
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  )
+                else if (_items.isEmpty)
+                  const SliverToBoxAdapter(
+                    child: Padding(
+                      padding: EdgeInsets.only(top: 44),
+                      child: _EmptyStateModern(),
+                    ),
+                  )
+                else
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+                    sliver: SliverGrid(
+                      gridDelegate:
+                          const SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: 2,
+                            crossAxisSpacing: 12,
+                            mainAxisSpacing: 12,
+                            childAspectRatio: 3 / 3.25,
+                          ),
+                      delegate: SliverChildBuilderDelegate(
+                        (context, i) => _BirdCardModern(
+                          brand: _brand,
+                          item: _items[i],
+                          thumbFuture: _thumbFor(_items[i]),
+                        ),
+                        childCount: _items.length,
+                      ),
+                    ),
+                  ),
+
+                // ===== Footer Orbix =====
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 6, 16, 14),
+                    child: Center(
+                      child: Opacity(
+                        opacity: 0.55,
+                        child: Column(
+                          children: [
+                            Image.asset(
+                              'assets/images/logo_orbix.png',
+                              width: 70,
+                              height: 70,
+                              fit: BoxFit.contain,
+                              errorBuilder: (_, __, ___) =>
+                                  const SizedBox.shrink(),
+                            ),
+                            const SizedBox(height: 6),
+                            const Text(
+                              'Desarrollado por Orbix',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w800,
+                                color: Colors.black54,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+
+                const SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: SizedBox.shrink(),
                 ),
               ],
             ),
-
-            if (_loading)
-              const SliverToBoxAdapter(
-                child: Padding(
-                  padding: EdgeInsets.only(top: 80),
-                  child: Center(child: CircularProgressIndicator()),
-                ),
-              )
-            else if (_items.isEmpty)
-              const SliverToBoxAdapter(
-                child: Padding(
-                  padding: EdgeInsets.only(top: 60),
-                  child: _EmptyState(),
-                ),
-              )
-            else
-              SliverPadding(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-                sliver: SliverGrid(
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 2,
-                    crossAxisSpacing: 12,
-                    mainAxisSpacing: 12,
-                    childAspectRatio: 3 / 3.2,
-                  ),
-                  delegate: SliverChildBuilderDelegate(
-                    (context, i) => _BirdCard(
-                      item: _items[i],
-                      thumbFuture: _thumbFor(_items[i]),
-                    ),
-                    childCount: _items.length,
-                  ),
-                ),
-              ),
           ],
         ),
       ),
@@ -184,11 +315,163 @@ class _HistoryScreenState extends State<HistoryScreen>
   }
 }
 
-/* ============================ Widgets ============================= */
+/* ============================ UI helpers ============================= */
 
-class _BirdCard extends StatelessWidget {
-  const _BirdCard({required this.item, required this.thumbFuture});
+class _HeaderIconButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onTap;
+  const _HeaderIconButton({required this.icon, required this.onTap});
 
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.white.withOpacity(.10),
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Container(
+          width: 44,
+          height: 44,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: Colors.white.withOpacity(.18), width: 1),
+          ),
+          child: Icon(icon, color: Colors.white, size: 22),
+        ),
+      ),
+    );
+  }
+}
+
+class _LogoPill extends StatelessWidget {
+  final String logoPath;
+  final String title;
+  const _LogoPill({required this.logoPath, required this.title});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(.10),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white.withOpacity(.18), width: 1),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Image.asset(
+            logoPath,
+            width: 26,
+            height: 26,
+            fit: BoxFit.contain,
+            errorBuilder: (_, __, ___) =>
+                const Icon(Icons.podcasts_rounded, color: Colors.white),
+          ),
+          const SizedBox(width: 10),
+          Text(
+            title,
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w900,
+              fontSize: 16,
+              letterSpacing: .2,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatusChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback? onTap;
+
+  const _StatusChip({required this.icon, required this.label, this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final chip = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(.12),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white.withOpacity(.20), width: 1),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: Colors.white.withOpacity(.92)),
+          const SizedBox(width: 8),
+          Text(
+            label,
+            style: TextStyle(
+              color: Colors.white.withOpacity(.92),
+              fontWeight: FontWeight.w900,
+              fontSize: 12.5,
+              letterSpacing: .2,
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (onTap == null) return chip;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: onTap,
+        child: chip,
+      ),
+    );
+  }
+}
+
+class _GlassCard extends StatelessWidget {
+  final Widget child;
+  const _GlassCard({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 18),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(22),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(.10),
+              borderRadius: BorderRadius.circular(22),
+              border: Border.all(
+                color: Colors.white.withOpacity(.16),
+                width: 1,
+              ),
+            ),
+            child: child,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/* ============================ Cards modern ============================= */
+
+class _BirdCardModern extends StatelessWidget {
+  const _BirdCardModern({
+    required this.brand,
+    required this.item,
+    required this.thumbFuture,
+  });
+
+  final Color brand;
   final CollectionItem item;
   final Future<String?> thumbFuture;
 
@@ -197,112 +480,127 @@ class _BirdCard extends StatelessWidget {
     return Material(
       color: Colors.white,
       borderRadius: BorderRadius.circular(20),
-      elevation: 2,
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            AspectRatio(
-              aspectRatio: 3 / 2,
-              child: FutureBuilder<String?>(
-                future: thumbFuture,
-                builder: (context, snap) {
-                  final waiting =
-                      snap.connectionState == ConnectionState.waiting;
-                  final url = snap.data;
+      elevation: 0,
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: Colors.black.withOpacity(.06), width: 1),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(.06),
+              blurRadius: 14,
+              offset: const Offset(0, 8),
+            ),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              AspectRatio(
+                aspectRatio: 3 / 2,
+                child: FutureBuilder<String?>(
+                  future: thumbFuture,
+                  builder: (context, snap) {
+                    final waiting =
+                        snap.connectionState == ConnectionState.waiting;
+                    final url = snap.data;
 
-                  return Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      const ColoredBox(color: Color(0xFFEFEFEF)),
-                      if (url != null && url.isNotEmpty)
-                        Image.network(
-                          url,
-                          fit: BoxFit.cover,
-                          gaplessPlayback: true,
-                          loadingBuilder: (c, child, progress) =>
-                              progress == null
-                              ? child
-                              : const Center(
-                                  child: SizedBox(
-                                    width: 26,
-                                    height: 26,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2.6,
+                    return Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        const ColoredBox(color: Color(0xFFEFEFEF)),
+                        if (url != null && url.isNotEmpty)
+                          Image.network(
+                            url,
+                            fit: BoxFit.cover,
+                            gaplessPlayback: true,
+                            loadingBuilder: (c, child, progress) =>
+                                progress == null
+                                ? child
+                                : const Center(
+                                    child: SizedBox(
+                                      width: 26,
+                                      height: 26,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2.6,
+                                      ),
                                     ),
                                   ),
-                                ),
-                          errorBuilder: (_, __, ___) => const Center(
+                            errorBuilder: (_, __, ___) => const Center(
+                              child: Icon(
+                                Icons.broken_image_outlined,
+                                size: 36,
+                                color: Colors.black26,
+                              ),
+                            ),
+                          )
+                        else if (waiting)
+                          const Center(
+                            child: SizedBox(
+                              width: 26,
+                              height: 26,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2.6,
+                              ),
+                            ),
+                          )
+                        else
+                          const Center(
                             child: Icon(
-                              Icons.broken_image_outlined,
-                              size: 36,
+                              Icons.image_outlined,
                               color: Colors.black26,
+                              size: 36,
                             ),
                           ),
-                        )
-                      else if (waiting)
-                        const Center(
-                          child: SizedBox(
-                            width: 26,
-                            height: 26,
-                            child: CircularProgressIndicator(strokeWidth: 2.6),
-                          ),
-                        )
-                      else
-                        const Center(
-                          child: Icon(
-                            Icons.image_outlined,
-                            color: Colors.black26,
-                            size: 36,
+                        Positioned(
+                          right: 8,
+                          bottom: 8,
+                          child: Material(
+                            color: Colors.white,
+                            shape: const CircleBorder(),
+                            elevation: 2,
+                            child: IconButton(
+                              iconSize: 20,
+                              tooltip: 'Más',
+                              onPressed: () => _showInfo(context, item, brand),
+                              icon: Icon(Icons.more_horiz, color: brand),
+                            ),
                           ),
                         ),
-                      Positioned(
-                        right: 8,
-                        bottom: 8,
-                        child: Material(
-                          color: Colors.white,
-                          shape: const CircleBorder(),
-                          elevation: 2,
-                          child: IconButton(
-                            iconSize: 20,
-                            tooltip: 'Más',
-                            onPressed: () => _showInfo(context, item),
-                            icon: const Icon(Icons.more_horiz, color: kBrand),
-                          ),
-                        ),
-                      ),
-                    ],
-                  );
-                },
-              ),
-            ),
-            const SizedBox(height: 8),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-              child: Text(
-                item.commonName.isNotEmpty
-                    ? item.commonName
-                    : item.scientificName,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontWeight: FontWeight.w900,
-                  fontSize: 18,
-                  letterSpacing: .2,
-                  color: Color(0xFF2F3B39),
+                      ],
+                    );
+                  },
                 ),
               ),
-            ),
-            const Spacer(),
-            const SizedBox(height: 12),
-          ],
+              const SizedBox(height: 8),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
+                child: Text(
+                  item.commonName.isNotEmpty
+                      ? item.commonName
+                      : item.scientificName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w900,
+                    fontSize: 16,
+                    letterSpacing: .2,
+                    color: Color(0xFF2F3B39),
+                  ),
+                ),
+              ),
+              const Spacer(),
+              const SizedBox(height: 10),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  void _showInfo(BuildContext context, CollectionItem e) {
+  void _showInfo(BuildContext context, CollectionItem e, Color brand) {
     showModalBottomSheet(
       context: context,
       showDragHandle: true,
@@ -314,8 +612,7 @@ class _BirdCard extends StatelessWidget {
         String fmtDate(DateTime? d) {
           if (d == null) return '—';
           String two(int x) => x.toString().padLeft(2, '0');
-          return '${two(d.day)}/${two(d.month)}/${d.year} '
-              '${two(d.hour)}:${two(d.minute)}';
+          return '${two(d.day)}/${two(d.month)}/${d.year} ${two(d.hour)}:${two(d.minute)}';
         }
 
         return Padding(
@@ -325,10 +622,10 @@ class _BirdCard extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(
-                children: const [
-                  Icon(Icons.info_outline, color: kBrand),
-                  SizedBox(width: 8),
-                  Text(
+                children: [
+                  Icon(Icons.info_outline, color: brand),
+                  const SizedBox(width: 8),
+                  const Text(
                     'Información breve',
                     style: TextStyle(fontWeight: FontWeight.w800, fontSize: 18),
                   ),
@@ -387,27 +684,48 @@ Widget _kv(String key, String value) => Padding(
   ),
 );
 
-class _EmptyState extends StatelessWidget {
-  const _EmptyState();
+class _EmptyStateModern extends StatelessWidget {
+  const _EmptyStateModern();
+
   @override
-  Widget build(BuildContext context) => Column(
-    children: const [
-      Icon(
-        Icons.collections_bookmark_outlined,
-        size: 64,
-        color: Colors.black26,
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 18),
+      child: _GlassCard(
+        child: SizedBox(
+          height: 160,
+          child: Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.collections_bookmark_outlined,
+                  size: 58,
+                  color: Colors.white.withOpacity(.85),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  'Sin aves guardadas',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                    color: Colors.white.withOpacity(.95),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Tu colección mostrará el nombre y una foto de Internet.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(.80),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
-      SizedBox(height: 10),
-      Text(
-        'Sin aves guardadas',
-        style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-      ),
-      SizedBox(height: 6),
-      Text(
-        'Tu colección mostrará el nombre y una foto de Internet.',
-        textAlign: TextAlign.center,
-        style: TextStyle(color: Colors.black54),
-      ),
-    ],
-  );
+    );
+  }
 }

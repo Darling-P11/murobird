@@ -29,6 +29,7 @@ dependencies:
   connectivity_plus: ^6.0.5
   share_plus: ^10.0.0
   lottie: ^3.1.2
+  
 
 dev_dependencies:
   flutter_test:
@@ -41,9 +42,12 @@ flutter:
   assets:
     # Imágenes
     - assets/images/logo.png
+    - assets/images/OrBird_AI.png
     - assets/images/logo_birby.png
     - assets/images/murobird_sinfondo.png
-    # Mock/demos
+    - assets/images/orbird_ai_blanco.png
+    - assets/images/BANNER_inferior.png
+    - assets/images/microfono.png
     - assets/mock/espectrograma_demo.png
     - assets/mock/spectrogram_demo.png
     - assets/mock/mapa_demo.png
@@ -65,6 +69,6 @@ flutter:
 flutter_launcher_icons:
   android: true
   ios: false
-  image_path: assets/images/logo.png
-  adaptive_icon_foreground: assets/images/logo.png
-  adaptive_icon_background: "#10A37F"
+  image_path: assets/images/OrBird_AI.png
+  adaptive_icon_foreground: assets/images/OrBird_AI.png
+  adaptive_icon_background: "#001225"

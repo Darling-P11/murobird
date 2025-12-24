@@ -11,7 +11,7 @@
     
 
     <application
-        android:label="MuroBird"
+        android:label="OrBird AI"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
 

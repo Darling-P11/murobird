@@ -1,8 +1,11 @@
+// lib/screens/settings/app_permissions_screen.dart
 import 'dart:io' show Platform;
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
-import '../../core/theme.dart';
+
 import '../../core/routes.dart';
+import '../../widgets/bottom_nav_scaffold.dart';
 
 class AppPermissionsScreen extends StatefulWidget {
   const AppPermissionsScreen({super.key});
@@ -12,7 +15,8 @@ class AppPermissionsScreen extends StatefulWidget {
 }
 
 class _AppPermissionsScreenState extends State<AppPermissionsScreen> {
-  // Estados de permisos
+  static const Color _brand = Color(0xFF001225);
+
   PermissionStatus mic = PermissionStatus.denied;
   PermissionStatus storage = PermissionStatus.denied;
   PermissionStatus photos = PermissionStatus.denied; // iOS
@@ -32,24 +36,21 @@ class _AppPermissionsScreenState extends State<AppPermissionsScreen> {
 
     final micS = await Permission.microphone.status;
 
-    // Almacenamiento / fotos (según plataforma/SDK)
     PermissionStatus storageS = PermissionStatus.denied;
     PermissionStatus photosS = PermissionStatus.denied;
     PermissionStatus mediaS = PermissionStatus.denied;
 
     if (Platform.isAndroid) {
-      // Android 13+ usa permisos granulares para media
-      mediaS =
-          await Permission.photos.status; // incluye imágenes en Android 13+
-      // Para compatibilidad con Android < 13:
-      storageS = await Permission.storage.status;
+      // Android 13+ (imágenes) se suele mapear con Permission.photos
+      mediaS = await Permission.photos.status;
+      storageS = await Permission.storage.status; // compat < 13
     } else if (Platform.isIOS) {
       photosS = await Permission.photos.status;
     }
 
-    // Ubicación (si la app muestra mapa o centra al usuario)
     final locS = await Permission.locationWhenInUse.status;
 
+    if (!mounted) return;
     setState(() {
       mic = micS;
       storage = storageS;
@@ -67,80 +68,257 @@ class _AppPermissionsScreenState extends State<AppPermissionsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: kBg,
-      body: CustomScrollView(
-        slivers: [
-          // ===== Encabezado =====
-          SliverAppBar(
-            backgroundColor: kBrand,
-            pinned: true,
-            toolbarHeight: 96,
-            centerTitle: true,
-            shape: const RoundedRectangleBorder(
-              borderRadius: BorderRadius.vertical(bottom: Radius.circular(28)),
+    final top = MediaQuery.of(context).padding.top;
+
+    void goBack() {
+      final nav = Navigator.of(context);
+      if (nav.canPop()) {
+        nav.pop();
+      } else {
+        nav.pushReplacementNamed(Routes.home);
+      }
+    }
+
+    return BottomNavScaffold(
+      child: Stack(
+        children: [
+          // Fondo igual al Home
+          Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [_brand, _brand.withOpacity(.92), Colors.white],
+                stops: const [0, .42, 1],
+              ),
             ),
-            automaticallyImplyLeading: false,
-            leadingWidth: 56,
-            leading: IconButton(
-              icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
-              tooltip: 'Atrás',
-              onPressed: () {
-                final nav = Navigator.of(context);
-                if (nav.canPop()) {
-                  nav.pop();
-                } else {
-                  nav.pushReplacementNamed(Routes.home);
-                }
-              },
-            ),
-            title: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: const [
-                Icon(Icons.mic_rounded, color: Colors.white),
-                SizedBox(width: 8),
-                Text(
-                  'Permisos de la app',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w900,
-                    fontSize: 24,
+          ),
+
+          CustomScrollView(
+            physics: const BouncingScrollPhysics(),
+            slivers: [
+              // ===== HERO HEADER =====
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(18, top + 10, 18, 14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          _HeaderIconButton(
+                            icon: Icons.arrow_back_rounded,
+                            onTap: goBack,
+                          ),
+                          const Spacer(),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      const Text(
+                        'Permisos de la app',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 28,
+                          fontWeight: FontWeight.w900,
+                          height: 1.05,
+                          letterSpacing: .2,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Administra los permisos necesarios para grabar y consultar información.',
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(.82),
+                          fontSize: 14.5,
+                          fontWeight: FontWeight.w600,
+                          height: 1.35,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              ],
-            ),
-            actions: [
-              IconButton(
-                onPressed: _refreshStatuses,
-                icon: const Icon(Icons.refresh_rounded, color: Colors.white),
-                tooltip: 'Actualizar',
+              ),
+
+              // ===== CONTENIDO =====
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 14),
+                  child: Column(
+                    children: [
+                      // Separador blanco
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Divider(
+                              thickness: 1.6,
+                              color: Colors.white.withOpacity(.85),
+                            ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            child: Text(
+                              'Permisos',
+                              style: TextStyle(
+                                color: Colors.white.withOpacity(.85),
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                          Expanded(
+                            child: Divider(
+                              thickness: 1.6,
+                              color: Colors.white.withOpacity(.85),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+
+                      if (_loading)
+                        const Padding(
+                          padding: EdgeInsets.only(top: 26, bottom: 26),
+                          child: CircularProgressIndicator(),
+                        )
+                      else ...[
+                        _GlassCard(
+                          child: _PermCard(
+                            brand: _brand,
+                            title: 'Micrófono',
+                            icon: Icons.mic_rounded,
+                            description:
+                                'Necesario para detectar aves mediante audio en tiempo real.',
+                            status: mic,
+                            onRequest: () => _request(Permission.microphone),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+
+                        const SizedBox(height: 12),
+                      ],
+
+                      const SizedBox(height: 14),
+
+                      // Nota
+                      Text(
+                        'Puedes modificar estos permisos en cualquier momento desde los Ajustes del sistema.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(.80),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+
+                      const SizedBox(height: 18),
+
+                      // Footer Orbix
+                      Center(
+                        child: Opacity(
+                          opacity: 0.55,
+                          child: Column(
+                            children: [
+                              Image.asset(
+                                'assets/images/logo_orbix.png',
+                                width: 62,
+                                height: 62,
+                                fit: BoxFit.contain,
+                                errorBuilder: (_, __, ___) =>
+                                    const SizedBox.shrink(),
+                              ),
+                              const SizedBox(height: 6),
+                              const Text(
+                                'Desarrollado por Orbix',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w800,
+                                  color: Colors.black54,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+
+                      const SizedBox(height: 8),
+                    ],
+                  ),
+                ),
+              ),
+
+              const SliverFillRemaining(
+                hasScrollBody: false,
+                child: SizedBox(),
               ),
             ],
           ),
+        ],
+      ),
+    );
+  }
+}
 
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 18, 16, 28),
-              child: Column(
-                children: [
-                  _Card(
-                    title: 'Micrófono',
-                    icon: Icons.mic_rounded,
-                    child: _PermRow(
-                      description: 'Necesario para grabar cantos de aves.',
-                      status: mic,
-                      onRequest: () => _request(Permission.microphone),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
+/* ===================== UI Helpers (Home-like) ===================== */
 
-                  const Text(
-                    'Puedes cambiar estos permisos en cualquier momento desde los Ajustes del sistema.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.black45),
-                  ),
-                ],
-              ),
+class _HeaderIconButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onTap;
+  const _HeaderIconButton({required this.icon, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.white.withOpacity(.10),
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Container(
+          width: 44,
+          height: 44,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: Colors.white.withOpacity(.18), width: 1),
+          ),
+          child: Icon(icon, color: Colors.white, size: 22),
+        ),
+      ),
+    );
+  }
+}
+
+class _LogoPill extends StatelessWidget {
+  final String logoPath;
+  final String title;
+  const _LogoPill({required this.logoPath, required this.title});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(.10),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white.withOpacity(.18), width: 1),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Image.asset(
+            logoPath,
+            width: 26,
+            height: 26,
+            fit: BoxFit.contain,
+            errorBuilder: (_, __, ___) =>
+                const Icon(Icons.podcasts_rounded, color: Colors.white),
+          ),
+          const SizedBox(width: 10),
+          Text(
+            title,
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w900,
+              fontSize: 16,
+              letterSpacing: .2,
             ),
           ),
         ],
@@ -149,72 +327,60 @@ class _AppPermissionsScreenState extends State<AppPermissionsScreen> {
   }
 }
 
-/* ======================= Widgets locales ======================= */
-
-class _Card extends StatelessWidget {
-  const _Card({required this.title, required this.icon, required this.child});
-  final String title;
-  final IconData icon;
+class _GlassCard extends StatelessWidget {
   final Widget child;
+  const _GlassCard({required this.child});
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.white,
-      elevation: 2,
-      borderRadius: BorderRadius.circular(16),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(icon, color: kBrand),
-                const SizedBox(width: 8),
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w800,
-                    fontSize: 18,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            child,
-          ],
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(18),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(.10),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: Colors.white.withOpacity(.16), width: 1),
+          ),
+          child: child,
         ),
       ),
     );
   }
 }
 
-class _PermRow extends StatelessWidget {
-  const _PermRow({
-    required this.description,
-    required this.status,
-    this.label,
-    required this.onRequest,
-  });
+/* ===================== Permission Card ===================== */
 
+class _PermCard extends StatelessWidget {
+  final Color brand;
+  final String title;
+  final IconData icon;
   final String description;
-  final String? label;
   final PermissionStatus status;
   final VoidCallback onRequest;
+  final bool showIfDeniedOnly;
+
+  const _PermCard({
+    required this.brand,
+    required this.title,
+    required this.icon,
+    required this.description,
+    required this.status,
+    required this.onRequest,
+    this.showIfDeniedOnly = false,
+  });
+
+  bool get _isGranted => status == PermissionStatus.granted;
+
+  bool get _isHardDenied =>
+      status == PermissionStatus.permanentlyDenied ||
+      status == PermissionStatus.restricted;
 
   Color _chipColor() {
-    switch (status) {
-      case PermissionStatus.granted:
-        return Colors.green.shade600;
-      case PermissionStatus.limited:
-        return Colors.orange.shade700;
-      case PermissionStatus.denied:
-      case PermissionStatus.restricted:
-      case PermissionStatus.permanentlyDenied:
-      default:
-        return Colors.red.shade700;
-    }
+    if (_isGranted) return const Color(0xFF1DB954);
+    if (status == PermissionStatus.limited) return const Color(0xFFFFA000);
+    return const Color(0xFFFF6B6B);
   }
 
   String _statusText() {
@@ -228,7 +394,7 @@ class _PermRow extends StatelessWidget {
       case PermissionStatus.restricted:
         return 'Restringido';
       case PermissionStatus.permanentlyDenied:
-        return 'Denegado permanentemente';
+        return 'Bloqueado';
       default:
         return status.toString();
     }
@@ -236,38 +402,153 @@ class _PermRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListTile(
-      contentPadding: const EdgeInsets.fromLTRB(4, 2, 4, 2),
-      leading: const Icon(Icons.security_rounded, color: kBrand),
-      title: Text(
-        label ?? 'Permiso',
-        style: const TextStyle(fontWeight: FontWeight.w700),
+    if (showIfDeniedOnly && _isGranted) {
+      // Oculta tarjetas “opcionales” si ya está concedido
+      return const SizedBox.shrink();
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, color: Colors.white.withOpacity(.92)),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  title,
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(.95),
+                    fontWeight: FontWeight.w900,
+                    fontSize: 16,
+                  ),
+                ),
+              ),
+              _StatusChip(color: _chipColor(), label: _statusText()),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            description,
+            style: TextStyle(
+              color: Colors.white.withOpacity(.85),
+              fontWeight: FontWeight.w600,
+              height: 1.25,
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          Row(
+            children: [
+              Expanded(
+                child: _ActionBtn(
+                  brand: brand,
+                  icon: Icons.security_rounded,
+                  label: _isHardDenied ? 'Abrir ajustes' : 'Solicitar permiso',
+                  onTap: () async {
+                    if (_isHardDenied) {
+                      await openAppSettings();
+                    } else {
+                      onRequest();
+                    }
+                  },
+                  filled: true,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _ActionBtn(
+                  brand: brand,
+                  icon: Icons.open_in_new_rounded,
+                  label: 'Ajustes',
+                  onTap: () async => openAppSettings(),
+                  filled: false,
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
-      subtitle: Text(description),
-      trailing: GestureDetector(
-        onTap: () async {
-          await openAppSettings();
-        },
+    );
+  }
+}
+
+class _StatusChip extends StatelessWidget {
+  final Color color;
+  final String label;
+  const _StatusChip({required this.color, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: color.withOpacity(.18),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withOpacity(.45), width: 1),
+      ),
+      child: Text(
+        label,
+        style: const TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.w900,
+          fontSize: 12,
+          letterSpacing: .2,
+        ),
+      ),
+    );
+  }
+}
+
+class _ActionBtn extends StatelessWidget {
+  final Color brand;
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  final bool filled;
+
+  const _ActionBtn({
+    required this.brand,
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    required this.filled,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = filled ? Colors.white.withOpacity(.14) : Colors.transparent;
+    final bd = Colors.white.withOpacity(.18);
+
+    return Material(
+      color: bg,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: onTap,
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
           decoration: BoxDecoration(
-            color: _chipColor(),
-            borderRadius: BorderRadius.circular(20),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: bd, width: 1),
           ),
           child: Row(
-            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(
-                Icons.open_in_new_rounded,
-                color: Colors.white,
-                size: 16,
-              ),
-              const SizedBox(width: 6),
-              Text(
-                _statusText(),
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w700,
+              Icon(icon, color: Colors.white, size: 18),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 13.2,
+                  ),
                 ),
               ),
             ],

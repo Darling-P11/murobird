@@ -62,7 +62,7 @@ class _SplashScreenState extends State<SplashScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: kBrand,
+      backgroundColor: const Color.fromRGBO(0, 18, 37, 1),
       body: SafeArea(
         child: Stack(
           children: [
@@ -72,14 +72,14 @@ class _SplashScreenState extends State<SplashScreen> {
                 children: [
                   // Logo
                   Image.asset(
-                    'assets/images/logo_birby.png',
-                    width: 112,
-                    height: 112,
+                    'assets/images/OrBird_AI.png',
+                    width: 132,
+                    height: 132,
                     fit: BoxFit.contain,
                   ),
                   const SizedBox(height: 18),
                   const Text(
-                    'MuroBird',
+                    'OrBird AI',
                     style: TextStyle(
                       color: Colors.white,
                       fontSize: 42,
@@ -88,10 +88,6 @@ class _SplashScreenState extends State<SplashScreen> {
                     ),
                   ),
                   const SizedBox(height: 4),
-                  const Text(
-                    'Escucha. Detecta. Conoce',
-                    style: TextStyle(color: Colors.white70, fontSize: 16),
-                  ),
                 ],
               ),
             ),

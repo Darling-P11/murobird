@@ -1,4 +1,4 @@
-package com.example.murobird
+package com.orbix.orbird
 
 import io.flutter.embedding.android.FlutterActivity
 

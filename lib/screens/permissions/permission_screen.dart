@@ -1,147 +1,136 @@
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
+
 import '../../core/routes.dart';
-import '../../core/theme.dart';
 
 class PermissionScreen extends StatelessWidget {
   const PermissionScreen({super.key});
 
+  static const Color _brand = Color(0xFF001225);
+
   Future<void> _requestMic(BuildContext context) async {
     final status = await Permission.microphone.request();
-    if (status.isGranted) {
-      if (context.mounted) {
-        Navigator.pushReplacementNamed(context, Routes.home);
-      }
+
+    if (!context.mounted) return;
+
+    if (status.isGranted || status.isDenied) {
+      Navigator.pushReplacementNamed(context, Routes.home);
     } else if (status.isPermanentlyDenied) {
-      // Si el usuario bloqueó permanentemente, abrir ajustes
       openAppSettings();
-    } else {
-      // Si solo negó, igual podemos mostrar Home pero sin audio
-      if (context.mounted) {
-        Navigator.pushReplacementNamed(context, Routes.home);
-      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    // Colores del “botón 3D” del micrófono
-    const accentLight = Color(0xFF27E2CB);
-    const accentDark = Color(0xFF11BFA6);
-
     return Scaffold(
-      backgroundColor: Colors.white,
-      body: SafeArea(
-        top: true,
-        child: Column(
-          children: [
-            const Spacer(flex: 2),
+      body: Container(
+        width: double.infinity,
+        height: double.infinity,
 
-            // ===== Círculo 3D con micrófono =====
-            Container(
-              width: 160,
-              height: 160,
-              decoration: const BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: LinearGradient(
-                  colors: [accentLight, accentDark],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Color(0x33000000),
-                    blurRadius: 22,
-                    spreadRadius: 1,
-                    offset: Offset(0, 14),
+        // ===== Fondo consistente =====
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [_brand, _brand.withOpacity(.92), Colors.white],
+            stops: const [0, .45, 1],
+          ),
+        ),
+
+        child: SafeArea(
+          child: Column(
+            children: [
+              const Spacer(flex: 2),
+
+              // ===== Imagen del micrófono =====
+              Image.asset(
+                'assets/images/microfono.png', // <-- TU IMAGEN
+                width: 180,
+                height: 180,
+                fit: BoxFit.contain,
+              ),
+
+              const SizedBox(height: 28),
+
+              // ===== Título =====
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 28),
+                child: Text(
+                  'Permitir acceso al micrófono',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 24,
+                    fontWeight: FontWeight.w900,
+                    height: 1.2,
                   ),
-                  BoxShadow(
-                    color: Color(0x1A000000),
-                    blurRadius: 8,
-                    offset: Offset(0, 2),
+                ),
+              ),
+
+              const SizedBox(height: 10),
+
+              // ===== Descripción corta =====
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 36),
+                child: Text(
+                  'Se utiliza únicamente para identificar aves por su canto.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(.80),
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    height: 1.35,
                   ),
-                ],
-              ),
-              child: const Center(
-                child: Icon(Icons.mic, size: 64, color: Colors.white),
-              ),
-            ),
-
-            const SizedBox(height: 28),
-
-            // ===== Título y descripción =====
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 24),
-              child: Text(
-                'Permitir acceso al micrófono',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.w900,
-                  color: Colors.black87,
                 ),
               ),
-            ),
-            const SizedBox(height: 10),
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 28),
-              child: Text(
-                'Necesitamos acceso a tu micrófono para captar el audio de las aves',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 16,
-                  color: Colors.black54,
-                  height: 1.35,
-                ),
-              ),
-            ),
 
-            const Spacer(flex: 3),
+              const Spacer(flex: 3),
 
-            // ===== Botón Aceptar =====
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24),
-              child: SizedBox(
-                width: double.infinity,
-                height: 56,
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: kBrand,
-                    foregroundColor: Colors.white,
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(22),
+              // ===== BOTÓN PRINCIPAL =====
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 28),
+                child: SizedBox(
+                  width: double.infinity,
+                  height: 56,
+                  child: ElevatedButton(
+                    onPressed: () => _requestMic(context),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.white,
+                      foregroundColor: _brand,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(22),
+                      ),
+                      textStyle: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: .2,
+                      ),
                     ),
-                    textStyle: const TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: .2,
-                    ),
+                    child: const Text('Permitir micrófono'),
                   ),
-                  onPressed: () => _requestMic(context),
-                  child: const Text('Aceptar'),
                 ),
               ),
-            ),
 
-            const SizedBox(height: 14),
+              const SizedBox(height: 16),
 
-            // ===== “Ahora no” =====
-            TextButton(
-              onPressed: () =>
-                  Navigator.pushReplacementNamed(context, Routes.home),
-              child: const Text(
-                'Ahora no',
-                style: TextStyle(
-                  color: kBrand,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 16,
+              // ===== NO PERMITIR (SOLO TEXTO) =====
+              GestureDetector(
+                onTap: () =>
+                    Navigator.pushReplacementNamed(context, Routes.home),
+                child: Text(
+                  'No permitir',
+                  style: TextStyle(
+                    color: const Color.fromARGB(160, 0, 18, 37),
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
-            ),
 
-            const SizedBox(height: 16),
-          ],
+              const SizedBox(height: 36),
+            ],
+          ),
         ),
       ),
     );
