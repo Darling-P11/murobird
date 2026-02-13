@@ -37,10 +37,12 @@ class _ReferenceAudiosState extends State<ReferenceAudios> {
       if (!mounted) return;
       setState(() => _pos = d);
     });
+
     _player.onDurationChanged.listen((d) {
       if (!mounted) return;
       setState(() => _dur = d);
     });
+
     _player.onPlayerComplete.listen((_) {
       if (!mounted) return;
       setState(() {
@@ -93,11 +95,15 @@ class _ReferenceAudiosState extends State<ReferenceAudios> {
 
   String _metaLine(XCRecording r) {
     final bits = <String>[];
-    if (r.quality != null && r.quality!.isNotEmpty)
+    if (r.quality != null && r.quality!.isNotEmpty) {
       bits.add('Calidad: ${r.quality!}');
-    if (r.length != null && r.length!.isNotEmpty)
+    }
+    if (r.length != null && r.length!.isNotEmpty) {
       bits.add('Duración: ${r.length!}');
-    if (r.locality != null && r.locality!.isNotEmpty) bits.add(r.locality!);
+    }
+    if (r.locality != null && r.locality!.isNotEmpty) {
+      bits.add(r.locality!);
+    }
     return bits.join('  •  ');
   }
 
@@ -112,11 +118,18 @@ class _ReferenceAudiosState extends State<ReferenceAudios> {
             child: LinearProgressIndicator(color: kBrand),
           );
         }
+        if (snap.hasError) {
+          return Text(
+            'No se pudieron cargar los audios de referencia.\n${snap.error}',
+            style: const TextStyle(color: Color.fromARGB(137, 255, 255, 255)),
+          );
+        }
+
         final items = snap.data ?? const <XCRecording>[];
         if (items.isEmpty) {
           return const Text(
             'No hay audios de referencia disponibles.',
-            style: TextStyle(color: Colors.black54),
+            style: TextStyle(color: Color.fromARGB(137, 255, 255, 255)),
           );
         }
 
@@ -165,7 +178,15 @@ class _AudioTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bg = isCurrent ? const Color(0xFFE7F3F0) : const Color(0xFFF5F7F7);
+    // Fondo depende si está seleccionado
+    final bg = isCurrent
+        ? const Color(0xFFE7F3F0) // claro
+        : const Color.fromARGB(255, 66, 67, 67); // oscuro
+
+    // Texto depende del fondo
+    final textColor = isCurrent ? Colors.black87 : Colors.white;
+    final subColor = isCurrent ? Colors.black54 : Colors.white70;
+
     final icon = isLoading
         ? const SizedBox(
             width: 24,
@@ -188,7 +209,7 @@ class _AudioTile extends StatelessWidget {
               recording.title,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontWeight: FontWeight.w700),
+              style: TextStyle(fontWeight: FontWeight.w700, color: textColor),
             ),
             subtitle: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -198,10 +219,15 @@ class _AudioTile extends StatelessWidget {
                   value: isCurrent ? progress : 0.0,
                   minHeight: 3,
                   color: kBrand,
-                  backgroundColor: Colors.black12,
+                  backgroundColor: isCurrent ? Colors.black12 : Colors.white12,
                 ),
                 const SizedBox(height: 6),
-                Text(meta, maxLines: 2, overflow: TextOverflow.ellipsis),
+                Text(
+                  meta,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: subColor),
+                ),
               ],
             ),
           ),
