@@ -1,5 +1,6 @@
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
+
 import '../services/xeno_canto_service.dart';
 import '../core/theme.dart';
 
@@ -12,8 +13,18 @@ class XCAudioList extends StatefulWidget {
 }
 
 class _XCAudioListState extends State<XCAudioList> {
-  final _player = AudioPlayer();
+  final AudioPlayer _player = AudioPlayer();
   int? _playingIdx;
+
+  @override
+  void initState() {
+    super.initState();
+
+    // Cuando termina el audio, quitamos el “play activo”
+    _player.onPlayerComplete.listen((_) {
+      if (mounted) setState(() => _playingIdx = null);
+    });
+  }
 
   @override
   void dispose() {
@@ -27,9 +38,14 @@ class _XCAudioListState extends State<XCAudioList> {
       setState(() => _playingIdx = null);
       return;
     }
+
     await _player.stop();
-    final url = widget.items[i].fileUrl;
+
+    final url = (widget.items[i].fileUrl ?? '').trim();
+    if (url.isEmpty) return;
+
     await _player.play(UrlSource(url));
+
     setState(() => _playingIdx = i);
   }
 
@@ -38,14 +54,16 @@ class _XCAudioListState extends State<XCAudioList> {
     if (widget.items.isEmpty) {
       return const Text(
         'No se encontraron audios.',
-        style: TextStyle(color: Colors.black54),
+        style: TextStyle(color: Color.fromARGB(137, 255, 255, 255)),
       );
     }
+
     return Column(
       children: [
         for (int i = 0; i < widget.items.length; i++)
           Card(
             elevation: 0.5,
+            color: const Color.fromARGB(255, 60, 29, 125), // 👈 siempre oscuro
             child: ListTile(
               leading: CircleAvatar(
                 backgroundColor: kBrand.withOpacity(.15),
@@ -60,7 +78,10 @@ class _XCAudioListState extends State<XCAudioList> {
                 widget.items[i].title.isEmpty
                     ? 'Audio de referencia'
                     : widget.items[i].title,
-                style: const TextStyle(fontWeight: FontWeight.w700),
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  color: Colors.white,
+                ),
               ),
               subtitle: Text(
                 [
@@ -71,6 +92,7 @@ class _XCAudioListState extends State<XCAudioList> {
                   if (widget.items[i].locality != null)
                     widget.items[i].locality!,
                 ].join('  •  '),
+                style: const TextStyle(color: Colors.white70),
               ),
               onTap: () => _toggle(i),
             ),

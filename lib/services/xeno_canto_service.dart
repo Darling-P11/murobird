@@ -1,15 +1,29 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
-const _headers = {
+const _headers = <String, String>{
   'User-Agent':
       'MuroBird/1.0 (https://example.com; contacto: dev@murobird.app)',
+  'Accept': 'application/json',
 };
+
+/// ✅ Xeno-canto API v3 requiere `key`.
+/// flutter run --dart-define=XC_API_KEY=SU_KEY
+/// flutter run --dart-define=XC_API_KEY=SU_KEY
+
+const String _xcApiKey = String.fromEnvironment('XC_API_KEY', defaultValue: '');
 
 class XCRecording {
   final String id;
   final String title;
   final String fileUrl;
+
+  /// URL del sonograma (puede ser SVG/PNG/JPG)
+  final String? sonogramUrl;
+
+  /// True si la URL parece SVG
+  final bool sonogramIsSvg;
+
   final String? locality;
   final String? length;
   final String? quality;
@@ -18,97 +32,177 @@ class XCRecording {
     required this.id,
     required this.title,
     required this.fileUrl,
+    this.sonogramUrl,
+    this.sonogramIsSvg = false,
     this.locality,
     this.length,
     this.quality,
   });
+
+  @override
+  String toString() =>
+      'XCRecording(id=$id, title=$title, fileUrl=$fileUrl, sonogramUrl=$sonogramUrl, svg=$sonogramIsSvg)';
+}
+
+class XCImage {
+  final String url;
+  final bool isSvg;
+  XCImage(this.url, this.isSvg);
+
+  @override
+  String toString() => 'XCImage(url=$url, isSvg=$isSvg)';
 }
 
 class XenoCantoService {
-  // ======================= NUEVO: SONOGRAMAS =======================
+  // ======================= URL HELPERS =======================
 
-  /// Devuelve la URL del espectrograma (sonograma) grande de la
-  /// primera grabación para el [scientificName] dado.
-  /// Si no encuentra, retorna null.
-  static Future<String?> fetchSpectrogramUrl(
+  static String? _fixUrl(String? u) {
+    if (u == null) return null;
+    final s = u.trim();
+    if (s.isEmpty) return null;
+    if (s.startsWith('http://') || s.startsWith('https://')) return s;
+    if (s.startsWith('//')) return 'https:$s';
+    if (s.startsWith('/')) return 'https://xeno-canto.org$s';
+    return 'https://xeno-canto.org/$s';
+  }
+
+  static bool _looksLikeSvgUrl(String? u) {
+    if (u == null) return false;
+    final s = u.toLowerCase();
+    return s.contains('.svg') || s.contains('image/svg');
+  }
+
+  /// Extrae URL de sonograma desde `sono` (normalmente Map con {small, med, large, full})
+  static String? _sonogramFrom(dynamic sono) {
+    if (sono == null) return null;
+
+    if (sono is Map) {
+      final full = _fixUrl(sono['full']?.toString());
+      final large = _fixUrl(sono['large']?.toString());
+      final med = _fixUrl(sono['med']?.toString());
+      final small = _fixUrl(sono['small']?.toString());
+      return full ?? large ?? med ?? small;
+    }
+
+    if (sono is String) return _fixUrl(sono);
+
+    return null;
+  }
+
+  /// 🔥 El campo "file" a veces puede venir como String o como Map.
+  /// Esta función lo resuelve.
+  static String? _extractAudioUrl(dynamic fileField) {
+    if (fileField == null) return null;
+
+    // Caso común: String
+    if (fileField is String) return _fixUrl(fileField);
+
+    // Caso: Map (ej. {mp3: "...", wav: "..."} o similar)
+    if (fileField is Map) {
+      // Intente opciones comunes en orden:
+      final candidates = <String?>[
+        fileField['mp3']?.toString(),
+        fileField['wav']?.toString(),
+        fileField['ogg']?.toString(),
+        fileField['url']?.toString(),
+        fileField['download']?.toString(),
+      ].where((e) => e != null && e!.trim().isNotEmpty).toList();
+
+      if (candidates.isEmpty) return null;
+      return _fixUrl(candidates.first);
+    }
+
+    return _fixUrl(fileField.toString());
+  }
+
+  static Future<Map<String, dynamic>?> _getJson(
+    Uri url, {
+    bool debug = false,
+  }) async {
+    try {
+      if (debug) print('[XC] GET $url');
+
+      final res = await http.get(url, headers: _headers);
+
+      if (debug) {
+        print('[XC] status=${res.statusCode}');
+        if (res.statusCode != 200) {
+          print('[XC] body=${res.body}');
+        }
+      }
+
+      if (res.statusCode != 200) return null;
+
+      final decoded = json.decode(res.body);
+      if (decoded is! Map<String, dynamic>) return null;
+
+      if (decoded.containsKey('error')) {
+        if (debug) print('[XC] API error payload: ${decoded['error']}');
+        return null;
+      }
+
+      return decoded;
+    } catch (e) {
+      if (debug) print('[XC] error=$e');
+      return null;
+    }
+  }
+
+  // ======================= SONOGRAMAS =======================
+
+  /// Devuelve info del sonograma (URL + si es SVG) de la primera grabación
+  /// para el [scientificName] dado.
+  static Future<XCImage?> fetchSpectrogram(
     String scientificName, {
     bool debug = false,
   }) async {
-    final raw = (scientificName).trim();
+    final raw = scientificName.trim();
     if (raw.isEmpty) return null;
 
-    // Intentamos usar binomio válido (gen + sp); si no, query libre.
-    String query = raw;
     final bin = _extractBinomial(raw);
-    if (bin != null) {
-      final p = bin.split(RegExp(r'\s+'));
-      final gen = p[0], sp = p[1];
-      query = 'gen:$gen sp:$sp';
+    if (bin == null) {
+      if (debug) print('[XC] fetchSpectrogram: binomial inválido para "$raw"');
+      return null;
     }
+
+    final p = bin.split(RegExp(r'\s+'));
+    final gen = p[0], sp = p[1];
+    final query = 'gen:$gen sp:$sp grp:birds';
 
     final url = Uri.parse(
-      'https://xeno-canto.org/api/2/recordings?query=${Uri.encodeQueryComponent(query)}',
+      'https://xeno-canto.org/api/3/recordings?key=$_xcApiKey&query=${Uri.encodeQueryComponent(query)}',
     );
-    if (debug) print('[XC:SONO] GET $url');
 
-    final res = await http.get(url, headers: _headers);
-    if (res.statusCode != 200) return null;
+    // ✅ PRINT URL de extracción (API)
+    print('[XC] URL fetchSpectrogram => $url');
 
-    final data = json.decode(res.body) as Map<String, dynamic>;
+    final data = await _getJson(url, debug: debug);
+    if (data == null) return null;
+
     final recs = (data['recordings'] as List?) ?? const [];
-    if (recs.isEmpty) return null;
-
-    final first = recs.first as Map<String, dynamic>;
-    final sono = (first['sono'] as Map<String, dynamic>?) ?? const {};
-    final large = (sono['large'] as String?)?.trim();
-    final small = (sono['small'] as String?)?.trim();
-
-    // Xeno-Canto suele devolver URLs como //xeno-canto.org/...
-    String? fix(String? u) {
-      if (u == null || u.isEmpty) return null;
-      if (u.startsWith('http')) return u;
-      if (u.startsWith('//')) return 'https:$u';
-      return 'https://$u';
+    if (recs.isEmpty) {
+      if (debug) print('[XC] fetchSpectrogram: sin recordings');
+      return null;
     }
 
-    return fix(large) ?? fix(small);
-  }
-
-  /// (Opcional) Devuelve la URL del espectrograma para una grabación por ID.
-  static Future<String?> fetchSpectrogramUrlById(
-    String recordingId, {
-    bool debug = false,
-  }) async {
-    final id = recordingId.trim();
-    if (id.isEmpty) return null;
-    final url = Uri.parse(
-      'https://xeno-canto.org/api/2/recordings?query=nr:$id',
-    );
-    if (debug) print('[XC:SONO] GET $url');
-
-    final res = await http.get(url, headers: _headers);
-    if (res.statusCode != 200) return null;
-
-    final data = json.decode(res.body) as Map<String, dynamic>;
-    final recs = (data['recordings'] as List?) ?? const [];
-    if (recs.isEmpty) return null;
-
     final first = recs.first as Map<String, dynamic>;
-    final sono = (first['sono'] as Map<String, dynamic>?) ?? const {};
-    final large = (sono['large'] as String?)?.trim();
-    final small = (sono['small'] as String?)?.trim();
 
-    String? fix(String? u) {
-      if (u == null || u.isEmpty) return null;
-      if (u.startsWith('http')) return u;
-      if (u.startsWith('//')) return 'https:$u';
-      return 'https://$u';
-    }
+    final sonoUrl =
+        _sonogramFrom(first['sono']) ??
+        _fixUrl(first['sonogram']?.toString()) ??
+        _fixUrl(first['sono_large']?.toString()) ??
+        _fixUrl(first['sono_med']?.toString()) ??
+        _fixUrl(first['sono_small']?.toString());
 
-    return fix(large) ?? fix(small);
+    // ✅ PRINT de la URL REAL extraída del sonograma
+    print('[XC] Sonogram extraído => $sonoUrl');
+
+    if (sonoUrl == null) return null;
+
+    return XCImage(sonoUrl, _looksLikeSvgUrl(sonoUrl));
   }
 
-  // ======================= AUDIOS (ya existente) =======================
+  // ======================= AUDIOS =======================
 
   static Future<List<XCRecording>> fetchBySpecies(
     String label, {
@@ -123,55 +217,100 @@ class XenoCantoService {
       if (debug) print('[XC] no parece binomial, resolviendo vía GBIF…');
       binomial = await _resolveToBinomialViaGbif(label, debug: debug);
     }
+
     final latin = (binomial ?? _stripHtml(label).replaceAll('_', ' ').trim())
         .trim();
+
+    if (latin.isEmpty) return const [];
+
     if (debug) print('[XC] usando binomial="$latin"');
 
-    // ---- consultas a XC (Mantenemos el print del GET) ----
     Future<List<Map<String, dynamic>>> _queryRaw(String q) async {
       final url = Uri.parse(
-        'https://xeno-canto.org/api/2/recordings?query=${Uri.encodeQueryComponent(q)}',
+        'https://xeno-canto.org/api/3/recordings?key=$_xcApiKey&query=${Uri.encodeQueryComponent(q)}',
       );
-      print('[XC] GET $url'); // <-- NO lo eliminamos
-      final r = await http.get(url, headers: _headers);
-      if (debug) print('[XC] status=${r.statusCode}');
-      if (r.statusCode != 200) return const [];
-      final j = json.decode(r.body) as Map<String, dynamic>;
-      return ((j['recordings'] ?? []) as List).cast<Map<String, dynamic>>();
+
+      // ✅ PRINT URL de extracción (API)
+      print('[XC] URL fetchBySpecies/_queryRaw => $url');
+
+      try {
+        final r = await http.get(url, headers: _headers);
+
+        if (debug) {
+          print('[XC] status=${r.statusCode}');
+          if (r.statusCode != 200) {
+            print('[XC] body=${r.body}');
+          }
+        }
+
+        if (r.statusCode != 200) return const [];
+
+        final j = json.decode(r.body);
+        if (j is! Map<String, dynamic>) return const [];
+
+        if (j.containsKey('error')) {
+          if (debug) print('[XC] API error payload: ${j['error']}');
+          return const [];
+        }
+
+        final list = (j['recordings'] ?? []) as List;
+        if (debug) print('[XC] recordings encontrados=${list.length}');
+        return list.cast<Map<String, dynamic>>();
+      } catch (e) {
+        if (debug) print('[XC] error parse=$e');
+        return const [];
+      }
     }
 
     Future<List<Map<String, dynamic>>> _search(String latin) async {
       final out = <Map<String, dynamic>>[];
       final p = latin.split(RegExp(r'\s+'));
-      // Validar que de verdad parece "Genus species"
+
       if (p.length >= 2 && _isValidGenus(p[0]) && _isValidSpecies(p[1])) {
         final gen = p[0], sp = p[1];
-        if (debug) print('[XC] query binomial -> gen:$gen sp:$sp');
-        out.addAll(await _queryRaw('gen:$gen sp:$sp'));
-        if (out.isEmpty) out.addAll(await _queryRaw('gen:$gen sp:$sp q:A,B'));
-        if (out.isEmpty) out.addAll(await _queryRaw('$gen $sp'));
+
+        out.addAll(await _queryRaw('gen:$gen sp:$sp grp:birds'));
+
+        // Filtro por calidad como fallback
+        if (out.isEmpty) {
+          out.addAll(await _queryRaw('gen:$gen sp:$sp grp:birds q:A'));
+        }
       } else {
         if (debug) {
-          print(
-            '[XC] latin="$latin" no supera validación binomial; usando texto libre.',
-          );
+          print('[XC] "$latin" no pasa validación binomial; no consulto v3.');
         }
       }
-      if (out.isEmpty) out.addAll(await _queryRaw(latin));
+
       return out;
     }
 
     final raw = await _search(latin);
+    if (raw.isEmpty) {
+      if (debug) print('[XC] No hubo resultados para "$latin"');
+      return const [];
+    }
 
-    // map + score
     final scored = <_Scored>[];
     for (final m in raw) {
-      final file = (m['file'] as String?)?.trim();
-      if (file == null || file.isEmpty) continue;
+      final audioUrl = _extractAudioUrl(
+        m['file'] ?? m['fileUrl'] ?? m['url'] ?? m['download'],
+      );
+      if (audioUrl == null) continue;
 
-      final resolved = file.startsWith('http')
-          ? file
-          : 'https:${file.startsWith('//') ? file : '//xeno-canto.org/$file'}';
+      final sonoUrl =
+          _sonogramFrom(m['sono']) ??
+          _fixUrl(m['sonogram']?.toString()) ??
+          _fixUrl(m['sono_large']?.toString()) ??
+          _fixUrl(m['sono_med']?.toString()) ??
+          _fixUrl(m['sono_small']?.toString());
+
+      final isSvg = _looksLikeSvgUrl(sonoUrl);
+
+      // ✅ PRINT para confirmar lo que realmente se extrajo
+      if (debug) {
+        print('[XC] AUDIO extraído => $audioUrl');
+        print('[XC] SONO  extraído => $sonoUrl (svg=$isSvg)');
+      }
 
       final title = [
         (m['gen'] ?? '').toString().trim(),
@@ -188,6 +327,7 @@ class XenoCantoService {
           : (q == 'B')
           ? 1
           : 0;
+
       final dateStr = (m['date'] as String?) ?? '';
       final uploadedStr = (m['uploaded'] as String?) ?? '';
       final recency =
@@ -200,7 +340,9 @@ class XenoCantoService {
           XCRecording(
             id: (m['id'] ?? '').toString(),
             title: title.isEmpty ? latin : title,
-            fileUrl: resolved,
+            fileUrl: audioUrl,
+            sonogramUrl: sonoUrl,
+            sonogramIsSvg: isSvg,
             locality: m['loc'] as String?,
             length: lenStr,
             quality: (m['q'] as String?),
@@ -212,17 +354,26 @@ class XenoCantoService {
       );
     }
 
-    // dedup y top-N
+    // Dedup y top-N
     final seen = <String>{};
     final dedup = <_Scored>[];
     for (final s in scored) {
       if (seen.add(s.item.fileUrl)) dedup.add(s);
     }
+
     dedup.sort((a, b) => b.score.compareTo(a.score));
-    return dedup.take(limit).map((e) => e.item).toList();
+    final result = dedup.take(limit).map((e) => e.item).toList();
+
+    if (debug) {
+      print('[XC] RESULT FINAL => ${result.length} audios');
+      if (result.isNotEmpty) print('[XC] EJEMPLO => ${result.first}');
+    }
+
+    return result;
   }
 
   // ------------------------- helpers -------------------------
+
   static const _articles = <String>{
     'el',
     'la',
@@ -281,6 +432,7 @@ class XenoCantoService {
   static bool _isValidGenus(String w) =>
       RegExp(r'^[A-Z][a-zA-Z\-]{2,}$').hasMatch(w) &&
       !_articles.contains(w.toLowerCase());
+
   static bool _isValidSpecies(String w) => RegExp(r'^[a-z\-]{2,}$').hasMatch(w);
 
   static Future<String?> _resolveToBinomialViaGbif(
@@ -290,7 +442,6 @@ class XenoCantoService {
     final q = _stripHtml(text).replaceAll('_', ' ').trim();
     if (q.isEmpty) return null;
 
-    // /species/match
     try {
       final mr = await http.get(
         Uri.parse(
@@ -302,15 +453,16 @@ class XenoCantoService {
         final mj = json.decode(mr.body) as Map<String, dynamic>;
         final scn =
             (mj['scientificName'] ?? mj['canonicalName'] ?? '') as String;
-        if (_isValidGenus(scn.split(' ').first) &&
-            _isValidSpecies(scn.split(' ').last)) {
+        final parts = scn.split(' ');
+        if (parts.length >= 2 &&
+            _isValidGenus(parts.first) &&
+            _isValidSpecies(parts[1])) {
           if (debug) print('[XC] GBIF/match -> $scn');
-          return scn;
+          return '${parts.first} ${parts[1]}';
         }
       }
     } catch (_) {}
 
-    // /species/search
     try {
       final sr = await http.get(
         Uri.parse(
@@ -326,13 +478,17 @@ class XenoCantoService {
           final scn =
               (first['scientificName'] ?? first['canonicalName'] ?? '')
                   as String;
-          if (scn.isNotEmpty) {
+          final parts = scn.split(' ');
+          if (parts.length >= 2 &&
+              _isValidGenus(parts.first) &&
+              _isValidSpecies(parts[1])) {
             if (debug) print('[XC] GBIF/search -> $scn');
-            return scn;
+            return '${parts.first} ${parts[1]}';
           }
         }
       }
     } catch (_) {}
+
     if (debug) print('[XC] GBIF no resolvió "$q"');
     return null;
   }
